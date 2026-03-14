@@ -2,7 +2,7 @@
 
 Terminal audio visualizer for macOS. Renders real-time spectrum bars, waveforms, oscilloscopes, and stereo visualizations from mic input or system audio.
 
-![sonitus](sonitus.png)
+![spectrum](spectrum.png)
 
 ## Install
 
@@ -46,6 +46,11 @@ sonitus --list-devices         # list available audio devices
 - **wave** — real-time waveform amplitude plot
 - **scope** — oscilloscope with zero-crossing trigger
 - **stereo** — left channel bars up, right channel bars down from center
+
+| | |
+|---|---|
+| ![waveform](waveform.png) | ![oscilloscope](oscilloscope.png) |
+| ![stereo](stereo.png) | |
 
 ## Themes
 
