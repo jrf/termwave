@@ -1,5 +1,5 @@
 [package]
-name = "vox"
+name = "sonitus"
 version = "0.1.0"
 edition = "2021"
 description = "Terminal audio visualizer"
