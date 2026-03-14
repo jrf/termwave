@@ -16,7 +16,7 @@ struct Cli {
     #[arg(short, long)]
     mode: Option<String>,
 
-    /// Audio input device (defaults to system default, use "system" for system audio)
+    /// Audio input device (defaults to system audio via ScreenCaptureKit)
     #[arg(short, long)]
     device: Option<String>,
 
@@ -52,9 +52,9 @@ struct Cli {
     #[arg(long)]
     smoothing: Option<f32>,
 
-    /// Number of distinct gradient colors (0 = use all theme stops)
+    /// Color bars by position instead of amplitude
     #[arg(long)]
-    colors: Option<usize>,
+    gradient_by_position: bool,
 
     /// List available audio input devices
     #[arg(long)]
@@ -87,6 +87,15 @@ impl Mode {
             Mode::Stereo => "stereo",
         }
     }
+
+    fn next(&self) -> Self {
+        match self {
+            Mode::Spectrum => Mode::Wave,
+            Mode::Wave => Mode::Scope,
+            Mode::Scope => Mode::Stereo,
+            Mode::Stereo => Mode::Spectrum,
+        }
+    }
 }
 
 const DEFAULT_SAMPLE_RATE: u32 = 48000;
@@ -94,13 +103,19 @@ const MONSTERCAT_STRENGTH: f32 = 0.75;
 const MIN_BARS: usize = 8;
 const MAX_BARS: usize = 256;
 const BAR_STEP: usize = 8;
+/// Gravity acceleration in units/s². At 60fps (dt≈0.017s), a bar at height 1.0
+/// takes about 0.25s to fall — similar feel to the old per-frame 0.01 value.
+const GRAVITY_ACCEL: f32 = 5.0;
 
 fn start_audio(
     mono_buf: &audio::SampleBuffer,
     stereo: &audio::StereoPair,
     device: Option<&str>,
 ) -> Result<(u32, audio::CaptureHandle)> {
-    if device == Some(audio::SYSTEM_AUDIO_LABEL) || device == Some("system") {
+    if device.is_none()
+        || device == Some(audio::SYSTEM_AUDIO_LABEL)
+        || device == Some("system")
+    {
         audio::start_tap(
             mono_buf.clone(),
             (stereo.0.clone(), stereo.1.clone()),
@@ -128,7 +143,9 @@ fn save_state(
     cfg.theme = theme_name.to_string();
     cfg.bars = num_bars;
     cfg.mode = mode.as_str().to_string();
-    cfg.colors = settings.colors;
+
+    cfg.gradient_by_position = settings.gradient_by_position;
+
     let _ = config::save(cfg);
 }
 
@@ -171,11 +188,12 @@ fn main() -> Result<()> {
     if let Some(n) = cli.noise_floor {
         cfg.noise_floor = n;
     }
-    if let Some(c) = cli.colors {
-        cfg.colors = c;
+    if cli.gradient_by_position {
+        cfg.gradient_by_position = true;
     }
 
-    let mode = Mode::from_str(&cfg.mode);
+
+    let mut mode = Mode::from_str(&cfg.mode);
 
     // Start audio capture
     let mono_buf = audio::new_buffer(analysis::FFT_SIZE);
@@ -183,7 +201,7 @@ fn main() -> Result<()> {
     let mut device_name = cli
         .device
         .clone()
-        .unwrap_or_else(|| "Default device".to_string());
+        .unwrap_or_else(|| audio::SYSTEM_AUDIO_LABEL.to_string());
     let (mut sample_rate, mut capture) =
         start_audio(&mono_buf, &stereo, cli.device.as_deref())?;
 
@@ -191,7 +209,8 @@ fn main() -> Result<()> {
     let mut terminal = render::init()?;
     let fps = cfg.fps.max(1);
     let frame_duration = Duration::from_millis(1000 / fps);
-    let mut num_bars = cfg.bars.clamp(MIN_BARS, MAX_BARS);
+    let mut desired_bars = cfg.bars.clamp(MIN_BARS, MAX_BARS);
+    let mut num_bars = desired_bars;
     let mut prev_bars: Vec<f32> = vec![0.0; num_bars];
     let mut prev_left: Vec<f32> = vec![0.0; num_bars];
     let mut prev_right: Vec<f32> = vec![0.0; num_bars];
@@ -208,7 +227,7 @@ fn main() -> Result<()> {
         monstercat: cfg.monstercat,
         noise_floor: cfg.noise_floor,
         theme_idx,
-        colors: cfg.colors,
+        gradient_by_position: cfg.gradient_by_position,
     };
 
     let analyzer = analysis::SpectrumAnalyzer::new();
@@ -216,11 +235,50 @@ fn main() -> Result<()> {
     let mut autosens_l = analysis::AutoSensitivity::new();
     let mut autosens_r = analysis::AutoSensitivity::new();
 
+    // Gravity for bar fall-off
+    let mut gravity = analysis::Gravity::new(GRAVITY_ACCEL);
+    let mut gravity_l = analysis::Gravity::new(GRAVITY_ACCEL);
+    let mut gravity_r = analysis::Gravity::new(GRAVITY_ACCEL);
+
+    // FPS tracking
+    let mut frame_count: u32 = 0;
+    let mut fps_timer = Instant::now();
+    let mut actual_fps: Option<u32> = None;
+
+    // Track frame time for frame-rate independent gravity
+    let mut last_frame_time = Instant::now();
+
     loop {
         let frame_start = Instant::now();
 
+        // FPS counter: update once per second
+        frame_count += 1;
+        if fps_timer.elapsed() >= Duration::from_secs(1) {
+            actual_fps = Some(frame_count);
+            frame_count = 0;
+            fps_timer = Instant::now();
+        }
+
+        // Clamp bar count to terminal width (shrink if needed, restore when space returns)
+        let term_w = terminal.size()?.width.saturating_sub(2) as usize;
+        let effective_bars = desired_bars.min(term_w).max(MIN_BARS);
+        if effective_bars != num_bars {
+            num_bars = effective_bars;
+            prev_bars = vec![0.0; num_bars];
+            prev_left = vec![0.0; num_bars];
+            prev_right = vec![0.0; num_bars];
+        }
+
         match render::poll_input(Duration::ZERO)? {
             render::Action::Quit => break,
+            render::Action::CycleMode => {
+                mode = mode.next();
+                prev_bars = vec![0.0; num_bars];
+                prev_left = vec![0.0; num_bars];
+                prev_right = vec![0.0; num_bars];
+                save_state(&mut cfg, &settings, current_theme.name, num_bars, &mode);
+                continue;
+            }
             render::Action::SelectDevice => {
                 let devices = audio::list_devices()?;
                 match render::device_menu(&mut terminal, &devices)? {
@@ -231,7 +289,7 @@ fn main() -> Result<()> {
                         sample_rate = sr;
                         capture = handle;
                         device_name =
-                            new_device.unwrap_or_else(|| "Default device".to_string());
+                            new_device.unwrap_or_else(|| audio::SYSTEM_AUDIO_LABEL.to_string());
                         prev_bars = vec![0.0; num_bars];
                         prev_left = vec![0.0; num_bars];
                         prev_right = vec![0.0; num_bars];
@@ -274,7 +332,8 @@ fn main() -> Result<()> {
                 continue;
             }
             render::Action::MoreBars => {
-                num_bars = (num_bars + BAR_STEP).min(MAX_BARS);
+                desired_bars = (desired_bars + BAR_STEP).min(MAX_BARS);
+                num_bars = desired_bars;
                 prev_bars = vec![0.0; num_bars];
                 prev_left = vec![0.0; num_bars];
                 prev_right = vec![0.0; num_bars];
@@ -282,7 +341,8 @@ fn main() -> Result<()> {
                 continue;
             }
             render::Action::FewerBars => {
-                num_bars = (num_bars.saturating_sub(BAR_STEP)).max(MIN_BARS);
+                desired_bars = (desired_bars.saturating_sub(BAR_STEP)).max(MIN_BARS);
+                num_bars = desired_bars;
                 prev_bars = vec![0.0; num_bars];
                 prev_left = vec![0.0; num_bars];
                 prev_right = vec![0.0; num_bars];
@@ -291,6 +351,9 @@ fn main() -> Result<()> {
             }
             render::Action::None => {}
         }
+
+        let dt = last_frame_time.elapsed().as_secs_f32().clamp(0.001, 0.1);
+        last_frame_time = Instant::now();
 
         match mode {
             Mode::Spectrum => {
@@ -302,6 +365,7 @@ fn main() -> Result<()> {
                 let bars = analysis::bin_spectrum(
                     &magnitudes, num_bars, sample_rate, low_freq, high_freq,
                 );
+
                 let mut smoothed = analysis::smooth(&prev_bars, &bars, settings.smoothing);
                 if settings.monstercat {
                     analysis::monstercat(&mut smoothed, MONSTERCAT_STRENGTH);
@@ -310,8 +374,10 @@ fn main() -> Result<()> {
                     analysis::noise_gate(&mut smoothed, settings.noise_floor);
                 }
                 autosens.apply(&mut smoothed);
-                render::draw_spectrum(&mut terminal, &smoothed, current_theme, &device_name, settings.colors)?;
-                prev_bars = smoothed;
+                // Store prev_bars before gravity so gravity doesn't feed back into smoothing
+                prev_bars = smoothed.clone();
+                gravity.apply(&mut smoothed, dt);
+                render::draw_spectrum(&mut terminal, &smoothed, current_theme, &device_name, settings.gradient_by_position, actual_fps)?;
             }
             Mode::Stereo => {
                 let left_samples = {
@@ -333,6 +399,7 @@ fn main() -> Result<()> {
                     &right_mag, num_bars, sample_rate, low_freq, high_freq,
                 );
 
+
                 let mut smooth_l =
                     analysis::smooth(&prev_left, &left_bars, settings.smoothing);
                 let mut smooth_r =
@@ -350,27 +417,29 @@ fn main() -> Result<()> {
 
                 autosens_l.apply(&mut smooth_l);
                 autosens_r.apply(&mut smooth_r);
+                // Store before gravity so gravity doesn't feed back into smoothing
+                prev_left = smooth_l.clone();
+                prev_right = smooth_r.clone();
+                gravity_l.apply(&mut smooth_l, dt);
+                gravity_r.apply(&mut smooth_r, dt);
 
                 render::draw_stereo(
-                    &mut terminal, &smooth_l, &smooth_r, current_theme, &device_name, settings.colors,
+                    &mut terminal, &smooth_l, &smooth_r, current_theme, &device_name, settings.gradient_by_position, actual_fps,
                 )?;
-
-                prev_left = smooth_l;
-                prev_right = smooth_r;
             }
             Mode::Wave => {
                 let samples = {
                     let buf = mono_buf.lock().unwrap();
                     buf.clone()
                 };
-                render::draw_wave(&mut terminal, &samples, current_theme, &device_name)?;
+                render::draw_wave(&mut terminal, &samples, current_theme, &device_name, actual_fps)?;
             }
             Mode::Scope => {
                 let samples = {
                     let buf = mono_buf.lock().unwrap();
                     buf.clone()
                 };
-                render::draw_scope(&mut terminal, &samples, current_theme, &device_name)?;
+                render::draw_scope(&mut terminal, &samples, current_theme, &device_name, actual_fps)?;
             }
         }
 

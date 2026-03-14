@@ -58,22 +58,10 @@ fn sample_gradient(gradient: &[Color], v: f32) -> Color {
 }
 
 impl Theme {
-    /// Pick a gradient color based on normalized amplitude (0.0–1.0).
-    ///
-    /// `num_colors` controls how many distinct colors are produced:
-    /// - `0` = continuous interpolation across the gradient (smoothest)
-    /// - `2..` = quantize to that many distinct bands, each interpolated from
-    ///   the gradient
-    pub fn bar_color(&self, normalized: f32, num_colors: usize) -> Color {
-        let v = normalized.clamp(0.0, 1.0);
-        if num_colors == 0 {
-            return sample_gradient(self.gradient, v);
-        }
-        // Quantize to num_colors discrete bands
-        let bucket = (v * num_colors as f32) as usize;
-        let bucket = bucket.min(num_colors - 1);
-        let t = bucket as f32 / (num_colors - 1).max(1) as f32;
-        sample_gradient(self.gradient, t)
+    /// Pick a gradient color based on a normalized value (0.0–1.0),
+    /// interpolating between gradient stops.
+    pub fn bar_color(&self, normalized: f32) -> Color {
+        sample_gradient(self.gradient, normalized)
     }
 }
 

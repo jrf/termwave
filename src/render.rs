@@ -9,13 +9,16 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Bar, BarChart, BarGroup, Block, Borders, List, ListItem, Padding},
+    widgets::{Block, Borders, List, ListItem, Padding},
     widgets::canvas::{Canvas, Line as CanvasLine},
     Terminal,
 };
 use std::time::Duration;
 
 pub type Term = Terminal<CrosstermBackend<std::io::Stdout>>;
+
+/// Unicode block elements from 1/8 to full block.
+const BLOCK_CHARS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
 /// Initialize the terminal for raw-mode rendering.
 pub fn init() -> Result<Term> {
@@ -52,6 +55,7 @@ pub enum Action {
     Help,
     MoreBars,
     FewerBars,
+    CycleMode,
 }
 
 /// Poll for input events. Returns the action to take.
@@ -68,6 +72,7 @@ pub fn poll_input(timeout: Duration) -> Result<Action> {
                 KeyCode::Char('d') => return Ok(Action::SelectDevice),
                 KeyCode::Char('t') => return Ok(Action::SelectTheme),
                 KeyCode::Char('s') => return Ok(Action::Settings),
+                KeyCode::Char('m') => return Ok(Action::CycleMode),
                 KeyCode::Char('?') => return Ok(Action::Help),
                 KeyCode::Up | KeyCode::Char('+') => return Ok(Action::MoreBars),
                 KeyCode::Down | KeyCode::Char('-') => return Ok(Action::FewerBars),
@@ -253,8 +258,8 @@ pub struct Settings {
     pub monstercat: bool,
     pub noise_floor: f32,
     pub theme_idx: usize,
-    /// Number of distinct gradient colors (0 = all).
-    pub colors: usize,
+    /// If true, color by bar position; if false, color by amplitude.
+    pub gradient_by_position: bool,
 }
 
 /// Show settings menu. Returns updated settings.
@@ -307,14 +312,10 @@ pub fn settings_menu(terminal: &mut Term, settings: &Settings, themes: &[Theme])
                 ])),
                 ListItem::new(Line::from(vec![
                     Span::styled(
-                        format!("  {:16}", "Colors"),
+                        format!("  {:16}", "Gradient"),
                         Style::default().fg(Color::Cyan),
                     ),
-                    Span::raw(if current.colors == 0 {
-                        "all".to_string()
-                    } else {
-                        current.colors.to_string()
-                    }),
+                    Span::raw(if current.gradient_by_position { "[position]" } else { "[amplitude]" }),
                 ])),
             ]
             .into_iter()
@@ -363,6 +364,8 @@ pub fn settings_menu(terminal: &mut Term, settings: &Settings, themes: &[Theme])
                     KeyCode::Enter | KeyCode::Char(' ') => {
                         if selected == 2 {
                             current.monstercat = !current.monstercat;
+                        } else if selected == 4 {
+                            current.gradient_by_position = !current.gradient_by_position;
                         }
                     }
                     KeyCode::Esc | KeyCode::Char('s') => {
@@ -403,20 +406,8 @@ fn adjust_setting(settings: &mut Settings, idx: usize, direction: i32, num_theme
                 (settings.noise_floor + direction as f32 * 0.002).clamp(0.0, 0.05);
         }
         4 => {
-            // Colors: 0 (all), 2..=16
-            if direction > 0 {
-                settings.colors = match settings.colors {
-                    0 => 2,
-                    c if c < 16 => c + 1,
-                    _ => 0,
-                };
-            } else {
-                settings.colors = match settings.colors {
-                    0 => 16,
-                    2 => 0,
-                    c => c - 1,
-                };
-            }
+            // Gradient mode: toggle
+            settings.gradient_by_position = !settings.gradient_by_position;
         }
         _ => {}
     }
@@ -436,6 +427,7 @@ pub fn help(terminal: &mut Term) -> Result<()> {
         ("d", "Select audio device"),
         ("t", "Select color theme"),
         ("s", "Settings (smoothing, monstercat, noise)"),
+        ("m", "Cycle visualization mode"),
         ("Up / +", "More bars"),
         ("Down / -", "Fewer bars"),
         ("q / Esc", "Quit"),
@@ -503,64 +495,98 @@ pub fn help(terminal: &mut Term) -> Result<()> {
     }
 }
 
-/// Draw spectrum bars. Bars are pre-normalized by AutoSensitivity (0.0–1.0+ range).
-pub fn draw_spectrum(terminal: &mut Term, bars: &[f32], theme: &Theme, device: &str, num_colors: usize) -> Result<()> {
+/// Draw spectrum bars using Unicode block elements (▁▂▃▄▅▆▇█) for 1/8th-cell
+/// vertical resolution.
+pub fn draw_spectrum(
+    terminal: &mut Term,
+    bars: &[f32],
+    theme: &Theme,
+    device: &str,
+    gradient_by_position: bool,
+    actual_fps: Option<u32>,
+) -> Result<()> {
     let theme_name = theme.name;
     let num_bars = bars.len();
+    let fps_str = actual_fps.map(|f| format!(" {}fps", f)).unwrap_or_default();
+    let title = format!(" sonitus — spectrum [{}] ({} bars){} ", theme_name, num_bars, fps_str);
+    let bottom = format!(" {} | ? help ", device);
+
     terminal.draw(|frame| {
         let area = frame.area();
+        let border = Block::default()
+            .title(title.as_str())
+            .title_bottom(bottom.as_str())
+            .borders(Borders::ALL);
+        let inner = border.inner(area);
+        frame.render_widget(border, area);
+
+        let buf = frame.buffer_mut();
         let max_val = bars.iter().cloned().fold(0.0f32, f32::max).max(0.001);
+        let bar_w = (inner.width as usize / num_bars.max(1)).max(1);
 
-        let bar_width = ((area.width as usize).saturating_sub(2) / bars.len().max(1)).max(1) as u16;
+        for (i, &v) in bars.iter().enumerate() {
+            let normalized = v / max_val;
+            let color_val = if gradient_by_position {
+                i as f32 / (num_bars - 1).max(1) as f32
+            } else {
+                normalized
+            };
+            let color = theme.bar_color(color_val);
 
-        let ratatui_bars: Vec<Bar> = bars
-            .iter()
-            .map(|&v| {
-                let normalized = v / max_val;
-                let height = (normalized * 100.0) as u64;
-                Bar::default()
-                    .value(height)
-                    .text_value(String::new())
-                    .style(Style::default().fg(theme.bar_color(normalized, num_colors)))
-            })
-            .collect();
+            // Total height in 1/8ths of a cell
+            let eighths = (normalized * inner.height as f32 * 8.0) as usize;
+            let full_cells = eighths / 8;
+            let remainder = eighths % 8;
 
-        let chart = BarChart::default()
-            .block(
-                Block::default()
-                    .title(format!(" sonitus — spectrum [{}] ({} bars) ", theme_name, num_bars))
-                    .title_bottom(format!(" {} | ? help ", device))
-                    .borders(Borders::ALL),
-            )
-            .data(BarGroup::default().bars(&ratatui_bars))
-            .bar_width(bar_width)
-            .bar_gap(0)
-            .max(100);
+            let x_start = inner.x + (i * bar_w) as u16;
+            let x_end = (x_start + bar_w as u16).min(inner.x + inner.width);
 
-        frame.render_widget(chart, area);
+            // Draw from bottom up
+            for row in 0..inner.height {
+                let y = inner.y + inner.height - 1 - row;
+                let ch = if (row as usize) < full_cells {
+                    BLOCK_CHARS[8] // full block
+                } else if (row as usize) == full_cells && remainder > 0 {
+                    BLOCK_CHARS[remainder]
+                } else {
+                    ' '
+                };
+
+                for x in x_start..x_end {
+                    let cell = &mut buf[(x, y)];
+                    cell.set_char(ch);
+                    if ch != ' ' {
+                        cell.set_fg(color);
+                    }
+                }
+            }
+        }
     })?;
 
     Ok(())
 }
 
 /// Draw waveform.
-pub fn draw_wave(terminal: &mut Term, samples: &[f32], theme: &Theme, device: &str) -> Result<()> {
+pub fn draw_wave(terminal: &mut Term, samples: &[f32], theme: &Theme, device: &str, actual_fps: Option<u32>) -> Result<()> {
     let color = theme.wave_color;
-    let title = " sonitus — waveform ";
+    let fps_str = actual_fps.map(|f| format!(" {}fps", f)).unwrap_or_default();
+    let title = format!(" sonitus — waveform{} ", fps_str);
     let bottom = format!(" {} | ? help ", device);
-    draw_wave_inner(terminal, samples, title, &bottom, color)
+    draw_wave_inner(terminal, samples, &title, &bottom, color)
 }
 
 /// Draw oscilloscope (zero-crossing triggered waveform).
-pub fn draw_scope(terminal: &mut Term, samples: &[f32], theme: &Theme, device: &str) -> Result<()> {
+pub fn draw_scope(terminal: &mut Term, samples: &[f32], theme: &Theme, device: &str, actual_fps: Option<u32>) -> Result<()> {
     let trigger_offset = samples
         .windows(2)
         .position(|w| w[0] <= 0.0 && w[1] > 0.0)
         .unwrap_or(0);
 
     let triggered = &samples[trigger_offset..];
+    let fps_str = actual_fps.map(|f| format!(" {}fps", f)).unwrap_or_default();
+    let title = format!(" sonitus — oscilloscope{} ", fps_str);
     let bottom = format!(" {} | ? help ", device);
-    draw_wave_inner(terminal, triggered, " sonitus — oscilloscope ", &bottom, theme.scope_color)
+    draw_wave_inner(terminal, triggered, &title, &bottom, theme.scope_color)
 }
 
 fn draw_wave_inner(terminal: &mut Term, samples: &[f32], title: &str, bottom: &str, color: Color) -> Result<()> {
@@ -599,90 +625,119 @@ fn draw_wave_inner(terminal: &mut Term, samples: &[f32], title: &str, bottom: &s
 }
 
 /// Draw stereo spectrum: left channel bars grow up from center, right channel grows down.
+/// Uses Unicode block elements for the upper half (▁▂▃▄▅▆▇█) and full blocks for the lower half.
 pub fn draw_stereo(
     terminal: &mut Term,
     left_bars: &[f32],
     right_bars: &[f32],
     theme: &Theme,
     device: &str,
-    num_colors: usize,
+    gradient_by_position: bool,
+    actual_fps: Option<u32>,
 ) -> Result<()> {
     let theme_name = theme.name;
     let num_bars = left_bars.len();
+    let fps_str = actual_fps.map(|f| format!(" {}fps", f)).unwrap_or_default();
+    let title = format!(" sonitus — stereo [{}] ({} bars){} ", theme_name, num_bars, fps_str);
+    let bottom = format!(" {} | ? help ", device);
 
     terminal.draw(|frame| {
         let area = frame.area();
-        let inner_w = area.width.saturating_sub(2) as usize;
-        let inner_h = area.height.saturating_sub(2) as f64;
-        let half_h = inner_h / 2.0;
+        let border = Block::default()
+            .title(title.as_str())
+            .title_bottom(bottom.as_str())
+            .borders(Borders::ALL);
+        let inner = border.inner(area);
+        frame.render_widget(border, area);
 
+        let buf = frame.buffer_mut();
         let left_max = left_bars.iter().cloned().fold(0.0f32, f32::max).max(0.001);
         let right_max = right_bars.iter().cloned().fold(0.0f32, f32::max).max(0.001);
+        let bar_w = (inner.width as usize / num_bars.max(1)).max(1);
 
-        let canvas = Canvas::default()
-            .block(
-                Block::default()
-                    .title(format!(" sonitus — stereo [{}] ({} bars) ", theme_name, num_bars))
-                    .title_bottom(format!(" {} | ? help ", device))
-                    .borders(Borders::ALL),
-            )
-            .x_bounds([0.0, inner_w as f64])
-            .y_bounds([-half_h, half_h])
-            .paint(|ctx| {
-                let bar_w = (inner_w as f64 / left_bars.len() as f64).max(1.0);
+        // Split inner area into upper half (left channel) and lower half (right channel)
+        let half_h = inner.height / 2;
+        let center_y = inner.y + half_h;
 
-                // Left channel: bars grow upward from center (y=0)
-                for (i, &v) in left_bars.iter().enumerate() {
-                    let normalized = (v / left_max).clamp(0.0, 1.0);
-                    let height = normalized as f64 * half_h;
-                    let x = i as f64 * bar_w;
-                    let color = theme.bar_color(normalized, num_colors);
+        // Center line
+        for x in inner.x..inner.x + inner.width {
+            let cell = &mut buf[(x, center_y)];
+            cell.set_char('─');
+            cell.set_fg(Color::DarkGray);
+        }
 
-                    // Draw bar as vertical lines
-                    let steps = (height * 2.0).max(1.0) as usize;
-                    for s in 0..steps {
-                        let y = s as f64 / steps as f64 * height;
-                        ctx.draw(&CanvasLine {
-                            x1: x,
-                            y1: y,
-                            x2: x + bar_w - 0.5,
-                            y2: y,
-                            color,
-                        });
+        // Left channel: bars grow upward from center using block elements
+        for (i, &v) in left_bars.iter().enumerate() {
+            let normalized = (v / left_max).clamp(0.0, 1.0);
+            let color_val = if gradient_by_position {
+                i as f32 / (num_bars - 1).max(1) as f32
+            } else {
+                normalized
+            };
+            let color = theme.bar_color(color_val);
+
+            let eighths = (normalized * half_h as f32 * 8.0) as usize;
+            let full_cells = eighths / 8;
+            let remainder = eighths % 8;
+
+            let x_start = inner.x + (i * bar_w) as u16;
+            let x_end = (x_start + bar_w as u16).min(inner.x + inner.width);
+
+            // Draw from center upward
+            for row in 0..half_h {
+                let y = center_y - 1 - row;
+                let ch = if (row as usize) < full_cells {
+                    BLOCK_CHARS[8]
+                } else if (row as usize) == full_cells && remainder > 0 {
+                    BLOCK_CHARS[remainder]
+                } else {
+                    ' '
+                };
+
+                for x in x_start..x_end {
+                    let cell = &mut buf[(x, y)];
+                    cell.set_char(ch);
+                    if ch != ' ' {
+                        cell.set_fg(color);
                     }
                 }
+            }
+        }
 
-                // Right channel: bars grow downward from center (y=0)
-                for (i, &v) in right_bars.iter().enumerate() {
-                    let normalized = (v / right_max).clamp(0.0, 1.0);
-                    let height = normalized as f64 * half_h;
-                    let x = i as f64 * bar_w;
-                    let color = theme.bar_color(normalized, num_colors);
+        // Right channel: bars grow downward from center using full blocks
+        let lower_h = inner.height - half_h - 1; // -1 for center line
+        for (i, &v) in right_bars.iter().enumerate() {
+            let normalized = (v / right_max).clamp(0.0, 1.0);
+            let color_val = if gradient_by_position {
+                i as f32 / (num_bars - 1).max(1) as f32
+            } else {
+                normalized
+            };
+            let color = theme.bar_color(color_val);
 
-                    let steps = (height * 2.0).max(1.0) as usize;
-                    for s in 0..steps {
-                        let y = -(s as f64 / steps as f64 * height);
-                        ctx.draw(&CanvasLine {
-                            x1: x,
-                            y1: y,
-                            x2: x + bar_w - 0.5,
-                            y2: y,
-                            color,
-                        });
+            let filled_cells = (normalized * lower_h as f32) as usize;
+
+            let x_start = inner.x + (i * bar_w) as u16;
+            let x_end = (x_start + bar_w as u16).min(inner.x + inner.width);
+
+            // Draw from center downward
+            for row in 0..lower_h {
+                let y = center_y + 1 + row;
+                let ch = if (row as usize) < filled_cells {
+                    BLOCK_CHARS[8]
+                } else {
+                    ' '
+                };
+
+                for x in x_start..x_end {
+                    let cell = &mut buf[(x, y)];
+                    cell.set_char(ch);
+                    if ch != ' ' {
+                        cell.set_fg(color);
                     }
                 }
-
-                // Center line
-                ctx.draw(&CanvasLine {
-                    x1: 0.0,
-                    y1: 0.0,
-                    x2: inner_w as f64,
-                    y2: 0.0,
-                    color: Color::DarkGray,
-                });
-            });
-
-        frame.render_widget(canvas, area);
+            }
+        }
     })?;
 
     Ok(())

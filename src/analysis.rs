@@ -4,8 +4,9 @@ use std::f32::consts::PI;
 
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 
-/// FFT window size. Must be a power of two.
-pub const FFT_SIZE: usize = 2048;
+/// FFT window size. Must be a power of two. 8192 gives enough frequency
+/// resolution for distinct low-frequency bars with logarithmic binning.
+pub const FFT_SIZE: usize = 8192;
 
 /// Apply a Hann window to samples in-place.
 fn hann_window(samples: &mut [Complex<f32>]) {
@@ -103,6 +104,53 @@ pub fn smooth(prev: &[f32], current: &[f32], factor: f32) -> Vec<f32> {
         .zip(current.iter())
         .map(|(p, c)| p * factor + c * (1.0 - factor))
         .collect()
+}
+
+/// Gravity-based bar fall-off. Bars rise instantly but fall with acceleration,
+/// creating a natural-looking decay. Frame-rate independent via dt scaling.
+pub struct Gravity {
+    heights: Vec<f32>,
+    velocities: Vec<f32>,
+    /// Downward acceleration in units/s² (typical: 3.0–8.0).
+    accel: f32,
+}
+
+impl Gravity {
+    pub fn new(accel: f32) -> Self {
+        Self {
+            heights: Vec::new(),
+            velocities: Vec::new(),
+            accel,
+        }
+    }
+
+    /// Apply gravity to bars in-place. `dt` is the time since the last frame
+    /// in seconds. Bars that are rising jump to the new value; bars that are
+    /// falling decelerate smoothly.
+    pub fn apply(&mut self, bars: &mut [f32], dt: f32) {
+        // Resize on bar count change
+        if self.heights.len() != bars.len() {
+            self.heights = vec![0.0; bars.len()];
+            self.velocities = vec![0.0; bars.len()];
+        }
+
+        for (i, bar) in bars.iter_mut().enumerate() {
+            if *bar >= self.heights[i] {
+                // Rising: snap to new value, reset velocity
+                self.heights[i] = *bar;
+                self.velocities[i] = 0.0;
+            } else {
+                // Falling: v += a*dt, h -= v*dt (Euler integration)
+                self.velocities[i] += self.accel * dt;
+                self.heights[i] -= self.velocities[i] * dt;
+                if self.heights[i] < 0.0 {
+                    self.heights[i] = 0.0;
+                    self.velocities[i] = 0.0;
+                }
+            }
+            *bar = self.heights[i];
+        }
+    }
 }
 
 /// Monstercat-style smoothing: each peak spreads influence to its neighbors
