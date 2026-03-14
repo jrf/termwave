@@ -140,7 +140,7 @@ impl Gravity {
                 self.heights[i] = *bar;
                 self.velocities[i] = 0.0;
             } else {
-                // Falling: v += a*dt, h -= v*dt (Euler integration)
+                // Falling: v += a*dt, h -= v*dt (symplectic Euler)
                 self.velocities[i] += self.accel * dt;
                 self.heights[i] -= self.velocities[i] * dt;
                 if self.heights[i] < 0.0 {

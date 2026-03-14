@@ -159,24 +159,37 @@ pub fn start_tap(
         });
     }
 
-    // The tap outputs mono samples (already mixed down in Swift).
-    // Write to mono buffer and duplicate to both stereo channels.
+    // The tap outputs interleaved stereo (L, R, L, R...).
+    // Split into L/R channels and mix to mono.
     thread::spawn(move || {
         let mut read_buf = [0u8; 4096];
         loop {
             match stdout.read(&mut read_buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    let sample_bytes = &read_buf[..n - (n % 4)];
+                    // Align to 8 bytes (one stereo frame = 2 × f32 = 8 bytes)
+                    let sample_bytes = &read_buf[..n - (n % 8)];
                     let samples: Vec<f32> = sample_bytes
                         .chunks_exact(4)
                         .map(|chunk| f32::from_ne_bytes(chunk.try_into().unwrap()))
                         .collect();
 
-                    if !samples.is_empty() {
-                        write_to_buffer(&mono_buf, &samples);
-                        write_to_buffer(&stereo.0, &samples);
-                        write_to_buffer(&stereo.1, &samples);
+                    if samples.len() >= 2 {
+                        let mut mono = Vec::with_capacity(samples.len() / 2);
+                        let mut left = Vec::with_capacity(samples.len() / 2);
+                        let mut right = Vec::with_capacity(samples.len() / 2);
+
+                        for frame in samples.chunks_exact(2) {
+                            let l = frame[0];
+                            let r = frame[1];
+                            mono.push((l + r) / 2.0);
+                            left.push(l);
+                            right.push(r);
+                        }
+
+                        write_to_buffer(&mono_buf, &mono);
+                        write_to_buffer(&stereo.0, &left);
+                        write_to_buffer(&stereo.1, &right);
                     }
                 }
                 Err(_) => break,

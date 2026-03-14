@@ -4,7 +4,8 @@ import CoreMedia
 import AVFoundation
 
 // sonitus-tap: Captures system audio via ScreenCaptureKit and writes raw f32
-// PCM samples (mono, native endian) to stdout. Requires macOS 13+.
+// PCM samples to stdout (native endian). Sends interleaved stereo (L, R, L, R...)
+// by default, or mono with --mono. Requires macOS 13+.
 
 func log(_ msg: String) {
     FileHandle.standardError.write("\(msg)\n".data(using: .utf8)!)
@@ -19,7 +20,13 @@ var globalTermSrc: DispatchSourceSignal?
 @available(macOS 13.0, *)
 class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
     let outputHandle = FileHandle.standardOutput
+    let monoMode: Bool
     var samplesReceived: UInt64 = 0
+
+    init(mono: Bool = false) {
+        self.monoMode = mono
+        super.init()
+    }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio else { return }
@@ -43,30 +50,56 @@ class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
 
         let channels = channelCount(from: sampleBuffer)
 
-        let mono: [Float]
-        if channels > 1 {
-            mono = stride(from: 0, to: floats.count - (channels - 1), by: channels).map { i in
-                var sum: Float = 0
-                for ch in 0..<channels {
-                    sum += floats[i + ch]
+        let output: [Float]
+        if monoMode {
+            // Mix down to mono
+            if channels > 1 {
+                output = stride(from: 0, to: floats.count - (channels - 1), by: channels).map { i in
+                    var sum: Float = 0
+                    for ch in 0..<channels {
+                        sum += floats[i + ch]
+                    }
+                    return sum / Float(channels)
                 }
-                return sum / Float(channels)
+            } else {
+                output = floats
+            }
+        } else if channels >= 2 {
+            // Send interleaved stereo (first 2 channels only)
+            if channels == 2 {
+                output = floats
+            } else {
+                // Extract just L/R from >2 channel input
+                var stereo: [Float] = []
+                stereo.reserveCapacity(floats.count / channels * 2)
+                for i in stride(from: 0, to: floats.count - (channels - 1), by: channels) {
+                    stereo.append(floats[i])
+                    stereo.append(floats[i + 1])
+                }
+                output = stereo
             }
         } else {
-            mono = floats
+            // Mono source: duplicate to stereo
+            var stereo: [Float] = []
+            stereo.reserveCapacity(floats.count * 2)
+            for s in floats {
+                stereo.append(s)
+                stereo.append(s)
+            }
+            output = stereo
         }
 
         // Write raw f32 bytes to stdout
-        mono.withUnsafeBufferPointer { buf in
+        output.withUnsafeBufferPointer { buf in
             let bytes = UnsafeRawBufferPointer(buf)
             let outData = Data(bytes)
             outputHandle.write(outData)
         }
 
         if samplesReceived == 0 {
-            log("receiving audio (\(channels)ch, \(floatCount) samples in first buffer)")
+            log("receiving audio (\(channels)ch → \(monoMode ? "mono" : "stereo"), \(floatCount) samples in first buffer)")
         }
-        samplesReceived += UInt64(mono.count)
+        samplesReceived += UInt64(output.count)
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -119,7 +152,8 @@ func setup() async throws {
     config.sampleRate = Int(sampleRate)
     config.channelCount = 2
 
-    let tap = AudioTap()
+    let monoMode = args.contains("--mono")
+    let tap = AudioTap(mono: monoMode)
     let stream = SCStream(filter: filter, configuration: config, delegate: tap)
 
     try stream.addStreamOutput(tap, type: .screen, sampleHandlerQueue: .global(qos: .utility))
