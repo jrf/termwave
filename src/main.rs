@@ -111,6 +111,7 @@ fn start_audio(
     mono_buf: &audio::SampleBuffer,
     stereo: &audio::StereoPair,
     device: Option<&str>,
+    last_write: &audio::LastWriteTime,
 ) -> Result<(u32, audio::CaptureHandle)> {
     if device.is_none()
         || device == Some(audio::SYSTEM_AUDIO_LABEL)
@@ -120,12 +121,14 @@ fn start_audio(
             mono_buf.clone(),
             (stereo.0.clone(), stereo.1.clone()),
             DEFAULT_SAMPLE_RATE,
+            last_write,
         )
     } else {
         audio::start_capture(
             mono_buf.clone(),
             (stereo.0.clone(), stereo.1.clone()),
             device,
+            last_write,
         )
     }
 }
@@ -198,12 +201,13 @@ fn main() -> Result<()> {
     // Start audio capture
     let mono_buf = audio::new_buffer(analysis::FFT_SIZE);
     let stereo = audio::new_stereo_buffers(analysis::FFT_SIZE);
+    let last_write = audio::LastWriteTime::new();
     let mut device_name = cli
         .device
         .clone()
         .unwrap_or_else(|| audio::SYSTEM_AUDIO_LABEL.to_string());
     let (mut sample_rate, mut capture) =
-        start_audio(&mono_buf, &stereo, cli.device.as_deref())?;
+        start_audio(&mono_buf, &stereo, cli.device.as_deref(), &last_write)?;
 
     // Init terminal
     let mut terminal = render::init()?;
@@ -285,7 +289,7 @@ fn main() -> Result<()> {
                     render::DeviceMenuResult::Selected(new_device) => {
                         drop(capture);
                         let (sr, handle) =
-                            start_audio(&mono_buf, &stereo, new_device.as_deref())?;
+                            start_audio(&mono_buf, &stereo, new_device.as_deref(), &last_write)?;
                         sample_rate = sr;
                         capture = handle;
                         device_name =
@@ -355,6 +359,15 @@ fn main() -> Result<()> {
         let dt = last_frame_time.elapsed().as_secs_f32().clamp(0.001, 0.1);
         last_frame_time = Instant::now();
 
+        // If no new audio data has arrived recently, zero the buffers so
+        // the display decays to silence instead of showing stale data.
+        let stale_timeout = Duration::from_millis(100);
+        if last_write.is_stale(stale_timeout) {
+            mono_buf.lock().unwrap().fill(0.0);
+            stereo.0.lock().unwrap().fill(0.0);
+            stereo.1.lock().unwrap().fill(0.0);
+        }
+
         match mode {
             Mode::Spectrum => {
                 let samples = {
@@ -370,12 +383,13 @@ fn main() -> Result<()> {
                 if settings.monstercat {
                     analysis::monstercat(&mut smoothed, MONSTERCAT_STRENGTH);
                 }
+                // Store prev_bars before autosens so smoothing always operates
+                // on raw-scale values — not normalized ones that get re-inflated.
+                prev_bars = smoothed.clone();
+                autosens.apply(&mut smoothed);
                 if settings.noise_floor > 0.0 {
                     analysis::noise_gate(&mut smoothed, settings.noise_floor);
                 }
-                autosens.apply(&mut smoothed);
-                // Store prev_bars before gravity so gravity doesn't feed back into smoothing
-                prev_bars = smoothed.clone();
                 gravity.apply(&mut smoothed, dt);
                 render::draw_spectrum(&mut terminal, &smoothed, current_theme, &device_name, settings.gradient_by_position, actual_fps)?;
             }
@@ -410,16 +424,17 @@ fn main() -> Result<()> {
                     analysis::monstercat(&mut smooth_r, MONSTERCAT_STRENGTH);
                 }
 
+                // Store before autosens so smoothing operates on raw-scale values.
+                prev_left = smooth_l.clone();
+                prev_right = smooth_r.clone();
+
+                autosens_l.apply(&mut smooth_l);
+                autosens_r.apply(&mut smooth_r);
+
                 if settings.noise_floor > 0.0 {
                     analysis::noise_gate(&mut smooth_l, settings.noise_floor);
                     analysis::noise_gate(&mut smooth_r, settings.noise_floor);
                 }
-
-                autosens_l.apply(&mut smooth_l);
-                autosens_r.apply(&mut smooth_r);
-                // Store before gravity so gravity doesn't feed back into smoothing
-                prev_left = smooth_l.clone();
-                prev_right = smooth_r.clone();
                 gravity_l.apply(&mut smooth_l, dt);
                 gravity_r.apply(&mut smooth_r, dt);
 

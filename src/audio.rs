@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader, Read as _};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -14,6 +15,25 @@ pub type SampleBuffer = Arc<Mutex<Vec<f32>>>;
 
 /// Stereo sample buffers (left, right).
 pub type StereoPair = (SampleBuffer, SampleBuffer);
+
+/// Tracks when samples were last written. If no new data arrives for a while,
+/// the render thread can treat the buffer as silence instead of showing stale data.
+pub struct LastWriteTime(Arc<Mutex<Instant>>);
+
+impl LastWriteTime {
+    pub fn new() -> Self {
+        Self(Arc::new(Mutex::new(Instant::now())))
+    }
+
+    pub fn clone_inner(&self) -> Arc<Mutex<Instant>> {
+        self.0.clone()
+    }
+
+    /// Returns true if no samples have been written for longer than `timeout`.
+    pub fn is_stale(&self, timeout: std::time::Duration) -> bool {
+        self.0.lock().unwrap().elapsed() > timeout
+    }
+}
 
 /// Create a new shared sample buffer.
 pub fn new_buffer(capacity: usize) -> SampleBuffer {
@@ -49,6 +69,7 @@ pub fn start_capture(
     mono_buf: SampleBuffer,
     stereo: StereoPair,
     device_name: Option<&str>,
+    last_write: &LastWriteTime,
 ) -> Result<(u32, CaptureHandle)> {
     let host = cpal::default_host();
 
@@ -72,14 +93,17 @@ pub fn start_capture(
         eprintln!("audio stream error: {}", err);
     };
 
+    let lw = last_write.clone_inner();
+
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => {
             let mb = mono_buf.clone();
             let st = (stereo.0.clone(), stereo.1.clone());
+            let lw = lw.clone();
             device.build_input_stream(
                 &config.into(),
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    write_samples(&mb, &st, data, channels);
+                    write_samples(&mb, &st, data, channels, &lw);
                 },
                 err_fn,
                 None,
@@ -88,6 +112,7 @@ pub fn start_capture(
         cpal::SampleFormat::I16 => {
             let mb = mono_buf.clone();
             let st = (stereo.0.clone(), stereo.1.clone());
+            let lw = lw.clone();
             device.build_input_stream(
                 &config.into(),
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
@@ -95,7 +120,7 @@ pub fn start_capture(
                         .iter()
                         .map(|&s| s as f32 / i16::MAX as f32)
                         .collect();
-                    write_samples(&mb, &st, &floats, channels);
+                    write_samples(&mb, &st, &floats, channels, &lw);
                 },
                 err_fn,
                 None,
@@ -104,6 +129,7 @@ pub fn start_capture(
         cpal::SampleFormat::U16 => {
             let mb = mono_buf.clone();
             let st = (stereo.0.clone(), stereo.1.clone());
+            let lw = lw.clone();
             device.build_input_stream(
                 &config.into(),
                 move |data: &[u16], _: &cpal::InputCallbackInfo| {
@@ -111,7 +137,7 @@ pub fn start_capture(
                         .iter()
                         .map(|&s| (s as f32 / u16::MAX as f32) * 2.0 - 1.0)
                         .collect();
-                    write_samples(&mb, &st, &floats, channels);
+                    write_samples(&mb, &st, &floats, channels, &lw);
                 },
                 err_fn,
                 None,
@@ -129,6 +155,7 @@ pub fn start_tap(
     mono_buf: SampleBuffer,
     stereo: StereoPair,
     sample_rate: u32,
+    last_write: &LastWriteTime,
 ) -> Result<(u32, CaptureHandle)> {
     let tap_bin = find_tap_binary();
 
@@ -161,6 +188,7 @@ pub fn start_tap(
 
     // The tap outputs interleaved stereo (L, R, L, R...).
     // Split into L/R channels and mix to mono.
+    let lw = last_write.clone_inner();
     thread::spawn(move || {
         let mut read_buf = [0u8; 4096];
         loop {
@@ -187,9 +215,9 @@ pub fn start_tap(
                             right.push(r);
                         }
 
-                        write_to_buffer(&mono_buf, &mono);
-                        write_to_buffer(&stereo.0, &left);
-                        write_to_buffer(&stereo.1, &right);
+                        write_to_buffer(&mono_buf, &mono, &lw);
+                        write_to_buffer(&stereo.0, &left, &lw);
+                        write_to_buffer(&stereo.1, &right, &lw);
                     }
                 }
                 Err(_) => break,
@@ -219,8 +247,8 @@ fn find_tap_binary() -> String {
     "sonitus-tap".to_string()
 }
 
-/// Write samples into a single ring buffer.
-fn write_to_buffer(buffer: &SampleBuffer, samples: &[f32]) {
+/// Write samples into a single ring buffer and update the write timestamp.
+fn write_to_buffer(buffer: &SampleBuffer, samples: &[f32], last_write: &Mutex<Instant>) {
     let mut buf = buffer.lock().unwrap();
     let capacity = buf.len();
     let new_len = samples.len();
@@ -231,6 +259,8 @@ fn write_to_buffer(buffer: &SampleBuffer, samples: &[f32]) {
         buf.rotate_left(new_len);
         buf[capacity - new_len..].copy_from_slice(samples);
     }
+
+    *last_write.lock().unwrap() = Instant::now();
 }
 
 /// Write incoming interleaved samples: mono-mix to mono_buf, split L/R to stereo.
@@ -239,6 +269,7 @@ fn write_samples(
     stereo: &StereoPair,
     data: &[f32],
     channels: usize,
+    last_write: &Mutex<Instant>,
 ) {
     let mut mono = Vec::with_capacity(data.len() / channels);
     let mut left = Vec::with_capacity(data.len() / channels);
@@ -252,9 +283,9 @@ fn write_samples(
         right.push(r);
     }
 
-    write_to_buffer(mono_buf, &mono);
-    write_to_buffer(&stereo.0, &left);
-    write_to_buffer(&stereo.1, &right);
+    write_to_buffer(mono_buf, &mono, last_write);
+    write_to_buffer(&stereo.0, &left, last_write);
+    write_to_buffer(&stereo.1, &right, last_write);
 }
 
 /// List available input device names.

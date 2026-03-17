@@ -204,8 +204,8 @@ impl AutoSensitivity {
     pub fn new() -> Self {
         Self {
             peak: 0.001,
-            decay: 0.05,
-            min_peak: 0.0001,
+            decay: 0.08,
+            min_peak: 0.005,
         }
     }
 
