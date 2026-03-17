@@ -259,6 +259,7 @@ fn main() -> Result<()> {
     let mut autosens_l = analysis::AutoSensitivity::new();
     let mut autosens_r = analysis::AutoSensitivity::new();
 
+
     // Gravity for bar fall-off
     let mut gravity = analysis::Gravity::new(GRAVITY_ACCEL);
     let mut gravity_l = analysis::Gravity::new(GRAVITY_ACCEL);
