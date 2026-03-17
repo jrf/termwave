@@ -120,7 +120,6 @@ fn start_audio(
     stereo: &audio::StereoPair,
     device: Option<&str>,
     last_write: &audio::LastWriteTime,
-    now_playing: &audio::NowPlaying,
 ) -> Result<(u32, audio::CaptureHandle)> {
     if device.is_none()
         || device == Some(audio::SYSTEM_AUDIO_LABEL)
@@ -131,11 +130,8 @@ fn start_audio(
             (stereo.0.clone(), stereo.1.clone()),
             DEFAULT_SAMPLE_RATE,
             last_write,
-            now_playing.clone(),
         )
     } else {
-        // Clear now-playing when switching to mic input
-        *now_playing.lock().unwrap() = None;
         audio::start_capture(
             mono_buf.clone(),
             (stereo.0.clone(), stereo.1.clone()),
@@ -229,7 +225,11 @@ fn main() -> Result<()> {
         .clone()
         .unwrap_or_else(|| audio::SYSTEM_AUDIO_LABEL.to_string());
     let (mut sample_rate, mut capture) =
-        start_audio(&mono_buf, &stereo, cli.device.as_deref(), &last_write, &now_playing)?;
+        start_audio(&mono_buf, &stereo, cli.device.as_deref(), &last_write)?;
+
+    // Poll now-playing in a background thread via osascript (separate process
+    // so TCC checks don't interfere with ScreenCaptureKit)
+    audio::start_now_playing_poller(now_playing.clone(), Duration::from_secs(3));
 
     // Init terminal
     let mut terminal = render::init()?;
@@ -278,6 +278,10 @@ fn main() -> Result<()> {
     // Track frame time for frame-rate independent gravity
     let mut last_frame_time = Instant::now();
 
+    // Auto-restart: track when we last attempted a tap restart to avoid hammering
+    let mut last_restart_attempt: Option<Instant> = None;
+    const RESTART_COOLDOWN: Duration = Duration::from_secs(2);
+
     loop {
         let frame_start = Instant::now();
 
@@ -318,7 +322,7 @@ fn main() -> Result<()> {
                     render::DeviceMenuResult::Selected(new_device) => {
                         drop(capture);
                         let (sr, handle) =
-                            start_audio(&mono_buf, &stereo, new_device.as_deref(), &last_write, &now_playing)?;
+                            start_audio(&mono_buf, &stereo, new_device.as_deref(), &last_write)?;
                         sample_rate = sr;
                         capture = handle;
                         device_name =
@@ -390,6 +394,44 @@ fn main() -> Result<()> {
 
         let dt = last_frame_time.elapsed().as_secs_f32().clamp(0.001, 0.1);
         last_frame_time = Instant::now();
+
+        // Detect stale audio: if the audio thread hasn't written new samples
+        // recently (e.g. ScreenCaptureKit connection lost), zero the buffers
+        // so we don't keep visualizing stale data.
+        if last_write.elapsed() > Duration::from_millis(100) {
+            mono_buf.lock().unwrap().fill(0.0);
+            stereo.0.lock().unwrap().fill(0.0);
+            stereo.1.lock().unwrap().fill(0.0);
+        }
+
+        // Auto-restart tap if it died (e.g. macOS revoked Screen Recording)
+        if capture.tap_exited() {
+            let should_restart = last_restart_attempt
+                .map(|t| t.elapsed() >= RESTART_COOLDOWN)
+                .unwrap_or(true);
+            if should_restart {
+                last_restart_attempt = Some(Instant::now());
+                drop(capture);
+                match start_audio(&mono_buf, &stereo, Some(&device_name), &last_write) {
+                    Ok((sr, handle)) => {
+                        sample_rate = sr;
+                        capture = handle;
+                        autosens = analysis::AutoSensitivity::new();
+                        autosens_l = analysis::AutoSensitivity::new();
+                        autosens_r = analysis::AutoSensitivity::new();
+                    }
+                    Err(_) => {
+                        // Create a dummy handle so we keep looping and retry later.
+                        // Use a no-op child that's already exited.
+                        capture = audio::CaptureHandle::Tap(
+                            std::process::Command::new("true")
+                                .spawn()
+                                .expect("failed to spawn dummy process"),
+                        );
+                    }
+                }
+            }
+        }
 
         // Detect silence: if the buffer's energy is negligible, zero the
         // smoothing state so bars fall via gravity instead of freezing.

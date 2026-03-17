@@ -6,51 +6,9 @@ import AVFoundation
 // termwave-tap: Captures system audio via ScreenCaptureKit and writes raw f32
 // PCM samples to stdout (native endian). Sends interleaved stereo (L, R, L, R...)
 // by default, or mono with --mono. Requires macOS 13+.
-//
-// Also emits now-playing track info on stderr as "TRACK:Artist — Title" lines.
 
 func log(_ msg: String) {
     FileHandle.standardError.write("\(msg)\n".data(using: .utf8)!)
-}
-
-/// Poll now-playing info via AppleScript and emit TRACK: lines on stderr.
-func startNowPlayingPoller(interval: TimeInterval = 3.0) {
-    var lastTrack = ""
-
-    let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-    timer.schedule(deadline: .now() + 1.0, repeating: interval)
-    timer.setEventHandler {
-        let track = getNowPlaying() ?? ""
-        if track != lastTrack {
-            lastTrack = track
-            log("TRACK:\(track)")
-        }
-    }
-    timer.resume()
-    globalNowPlayingTimer = timer
-}
-
-/// Get currently playing track from Music.app via AppleScript.
-func getNowPlaying() -> String? {
-    let script = """
-    tell application "System Events"
-        if not (exists process "Music") then return ""
-    end tell
-    tell application "Music"
-        if player state is playing then
-            set a to artist of current track
-            set n to name of current track
-            return a & " — " & n
-        end if
-    end tell
-    return ""
-    """
-    guard let appleScript = NSAppleScript(source: script) else { return nil }
-    var error: NSDictionary?
-    let result = appleScript.executeAndReturnError(&error)
-    if error != nil { return nil }
-    let text = result.stringValue ?? ""
-    return text.isEmpty ? nil : text
 }
 
 // Keep strong references so they aren't deallocated
@@ -58,7 +16,6 @@ var globalStream: SCStream?
 var globalTap: AudioTap?
 var globalSigSrc: DispatchSourceSignal?
 var globalTermSrc: DispatchSourceSignal?
-var globalNowPlayingTimer: DispatchSourceTimer?
 
 @available(macOS 13.0, *)
 class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
@@ -188,10 +145,11 @@ func setup() async throws {
     let config = SCStreamConfiguration()
     config.capturesAudio = true
     config.excludesCurrentProcessAudio = true
+    // Minimize video overhead — we only need audio
     config.showsCursor = false
     config.width = 2
     config.height = 2
-    config.minimumFrameInterval = CMTime(value: 1, timescale: 4)
+    config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
     config.sampleRate = Int(sampleRate)
     config.channelCount = 2
 
@@ -199,7 +157,6 @@ func setup() async throws {
     let tap = AudioTap(mono: monoMode)
     let stream = SCStream(filter: filter, configuration: config, delegate: tap)
 
-    try stream.addStreamOutput(tap, type: .screen, sampleHandlerQueue: .global(qos: .utility))
     try stream.addStreamOutput(tap, type: .audio, sampleHandlerQueue: .global(qos: .userInteractive))
 
     // Store in globals so they aren't deallocated
@@ -209,9 +166,6 @@ func setup() async throws {
     log("starting stream...")
     try await stream.startCapture()
     log("stream started, waiting for audio...")
-
-    // Start polling now-playing info
-    startNowPlayingPoller()
 
     // Signal handlers on main queue
     let sigSrc = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)

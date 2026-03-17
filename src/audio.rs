@@ -1,6 +1,6 @@
 //! Audio capture from system input devices via cpal, or from termwave-tap subprocess.
 
-use std::io::{BufRead, BufReader, Read as _};
+use std::io::Read as _;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -36,6 +36,10 @@ impl LastWriteTime {
         self.0.clone()
     }
 
+    /// How long since the audio thread last wrote samples.
+    pub fn elapsed(&self) -> std::time::Duration {
+        self.0.lock().unwrap().elapsed()
+    }
 }
 
 /// Create a new shared sample buffer.
@@ -54,6 +58,17 @@ pub fn new_stereo_buffers(capacity: usize) -> StereoPair {
 pub enum CaptureHandle {
     Device(Stream),
     Tap(Child),
+}
+
+impl CaptureHandle {
+    /// Returns true if this is a tap capture whose subprocess has exited.
+    pub fn tap_exited(&mut self) -> bool {
+        if let CaptureHandle::Tap(ref mut child) = self {
+            matches!(child.try_wait(), Ok(Some(_)))
+        } else {
+            false
+        }
+    }
 }
 
 impl Drop for CaptureHandle {
@@ -159,7 +174,6 @@ pub fn start_tap(
     stereo: StereoPair,
     sample_rate: u32,
     last_write: &LastWriteTime,
-    now_playing: NowPlaying,
 ) -> Result<(u32, CaptureHandle)> {
     let tap_bin = find_tap_binary();
 
@@ -168,7 +182,7 @@ pub fn start_tap(
     let mut child = Command::new(&tap_bin)
         .args(["--sample-rate", &sample_rate.to_string()])
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::null())
         .spawn()
         .context(format!(
             "failed to start termwave-tap (looked for '{}'). \
@@ -177,25 +191,6 @@ pub fn start_tap(
         ))?;
 
     let mut stdout = child.stdout.take().context("failed to get tap stdout")?;
-    let stderr = child.stderr.take();
-
-    if let Some(stderr) = stderr {
-        let np = now_playing;
-        thread::spawn(move || {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                match line {
-                    Ok(line) => {
-                        if let Some(track) = line.strip_prefix("TRACK:") {
-                            let track = track.trim().to_string();
-                            *np.lock().unwrap() = if track.is_empty() { None } else { Some(track) };
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-    }
 
     // The tap outputs interleaved stereo (L, R, L, R...).
     // Split into L/R channels and mix to mono.
@@ -328,3 +323,48 @@ fn which_exists(name: &str) -> bool {
 
 /// Label used in the device menu for system audio capture.
 pub const SYSTEM_AUDIO_LABEL: &str = "System Audio (ScreenCaptureKit)";
+
+const NOW_PLAYING_SCRIPT: &str = r#"
+tell application "System Events"
+    if not (exists process "Music") then return ""
+end tell
+tell application "Music"
+    if player state is playing then
+        set a to artist of current track
+        set n to name of current track
+        return a & " — " & n
+    end if
+end tell
+return ""
+"#;
+
+/// Poll now-playing info from Music.app via osascript in a background thread.
+/// Updates `now_playing` every `interval`. Runs until the process exits.
+pub fn start_now_playing_poller(now_playing: NowPlaying, interval: std::time::Duration) {
+    thread::spawn(move || {
+        // Small initial delay before first poll
+        thread::sleep(std::time::Duration::from_secs(1));
+        let mut last_track = String::new();
+        loop {
+            let track = query_now_playing().unwrap_or_default();
+            if track != last_track {
+                last_track = track.clone();
+                *now_playing.lock().unwrap() = if track.is_empty() { None } else { Some(track) };
+            }
+            thread::sleep(interval);
+        }
+    });
+}
+
+fn query_now_playing() -> Option<String> {
+    let output = Command::new("/usr/bin/osascript")
+        .args(["-e", NOW_PLAYING_SCRIPT])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if text.is_empty() { None } else { Some(text) }
+}
