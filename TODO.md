@@ -1,4 +1,4 @@
-# sonitus — TODO
+# termwave — TODO
 
 ## Phase 1: Core pipeline
 - [x] Audio capture: open default input device with cpal, write samples to shared ring buffer

@@ -1,4 +1,4 @@
-//! Audio capture from system input devices via cpal, or from sonitus-tap subprocess.
+//! Audio capture from system input devices via cpal, or from termwave-tap subprocess.
 
 use std::io::{BufRead, BufReader, Read as _};
 use std::process::{Child, Command, Stdio};
@@ -150,7 +150,7 @@ pub fn start_capture(
     Ok((sample_rate, CaptureHandle::Device(stream)))
 }
 
-/// Start capturing system audio via sonitus-tap subprocess.
+/// Start capturing system audio via termwave-tap subprocess.
 pub fn start_tap(
     mono_buf: SampleBuffer,
     stereo: StereoPair,
@@ -167,7 +167,7 @@ pub fn start_tap(
         .stderr(Stdio::piped())
         .spawn()
         .context(format!(
-            "failed to start sonitus-tap (looked for '{}'). \
+            "failed to start termwave-tap (looked for '{}'). \
              Build it with: cd tap && swift build -c release",
             tap_bin
         ))?;
@@ -234,17 +234,17 @@ fn clear_buffers(mono: &SampleBuffer, stereo: &StereoPair) {
     stereo.1.lock().unwrap().fill(0.0);
 }
 
-/// Find the sonitus-tap binary: check next to our own executable first, then PATH.
+/// Find the termwave-tap binary: check next to our own executable first, then PATH.
 fn find_tap_binary() -> String {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let candidate = dir.join("sonitus-tap");
+            let candidate = dir.join("termwave-tap");
             if candidate.exists() {
                 return candidate.to_string_lossy().into_owned();
             }
         }
     }
-    "sonitus-tap".to_string()
+    "termwave-tap".to_string()
 }
 
 /// Write samples into a single ring buffer and update the write timestamp.

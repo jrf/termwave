@@ -1,4 +1,4 @@
-# sonitus
+# termwave
 
 Terminal audio visualizer for macOS. Renders real-time spectrum bars, waveforms, oscilloscopes, and stereo visualizations from mic input or system audio.
 
@@ -10,19 +10,19 @@ Requires Rust and (optionally) Swift for system audio capture.
 just
 ```
 
-This builds and installs `sonitus` and `sonitus-tap` to `~/.cargo/bin`.
+This builds and installs `termwave` and `termwave-tap` to `~/.cargo/bin`.
 
 ## Usage
 
 ```
-sonitus                        # spectrum visualizer (system audio by default)
-sonitus --mode wave            # waveform mode
-sonitus --mode scope           # oscilloscope mode
-sonitus --mode stereo          # stereo L/R visualization
-sonitus --device "system"      # capture system audio (requires sonitus-tap)
-sonitus --theme fire           # use the fire color theme
-sonitus --bars 128             # set number of spectrum bars
-sonitus --list-devices         # list available audio devices
+termwave                        # spectrum visualizer (system audio by default)
+termwave --mode wave            # waveform mode
+termwave --mode scope           # oscilloscope mode
+termwave --mode stereo          # stereo L/R visualization
+termwave --device "system"      # capture system audio (requires termwave-tap)
+termwave --theme fire           # use the fire color theme
+termwave --bars 128             # set number of spectrum bars
+termwave --list-devices         # list available audio devices
 ```
 
 ## Keybindings
@@ -71,11 +71,11 @@ Press `s` to open the settings menu. Adjust with arrow keys or vim bindings:
 - **Noise floor** — threshold to zero out quiet bars
 - **Gradient mode** — color by amplitude or by bar position
 
-All settings persist to `~/.config/sonitus/config.toml`.
+All settings persist to `~/.config/termwave/config.toml`.
 
 ## System audio capture
 
-To visualize audio from Apple Music or other apps, sonitus uses a companion Swift binary (`sonitus-tap`) that captures system audio via ScreenCaptureKit.
+To visualize audio from Apple Music or other apps, termwave uses a companion Swift binary (`termwave-tap`) that captures system audio via ScreenCaptureKit.
 
 **Requirements:**
 - macOS 13+

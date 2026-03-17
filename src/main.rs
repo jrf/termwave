@@ -10,7 +10,7 @@ use anyhow::Result;
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(name = "sonitus", about = "Terminal audio visualizer")]
+#[command(name = "termwave", about = "Terminal audio visualizer")]
 struct Cli {
     /// Visualization mode
     #[arg(short, long)]

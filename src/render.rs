@@ -125,7 +125,7 @@ pub fn device_menu(terminal: &mut Term, devices: &[String]) -> Result<DeviceMenu
 
             let list = List::new(items).block(
                 Block::default()
-                    .title(" sonitus — select audio device ")
+                    .title(" termwave — select audio device ")
                     .title_bottom(" ↑/↓ navigate  Enter select  Esc back  q quit ")
                     .borders(Borders::ALL)
                     .padding(Padding::vertical(1)),
@@ -212,7 +212,7 @@ pub fn theme_menu(terminal: &mut Term, themes: &[Theme], current_idx: usize) -> 
 
             let list = List::new(items).block(
                 Block::default()
-                    .title(" sonitus — select theme ")
+                    .title(" termwave — select theme ")
                     .title_bottom(" ↑/↓ navigate  Enter select  Esc back  q quit ")
                     .borders(Borders::ALL)
                     .padding(Padding::vertical(1)),
@@ -335,7 +335,7 @@ pub fn settings_menu(terminal: &mut Term, settings: &Settings, themes: &[Theme])
 
             let list = List::new(items).block(
                 Block::default()
-                    .title(" sonitus — settings ")
+                    .title(" termwave — settings ")
                     .title_bottom(" ↑/↓ navigate  ←/→ adjust  Enter/Space toggle  Esc back ")
                     .borders(Borders::ALL)
                     .padding(Padding::new(2, 2, 1, 1)),
@@ -476,7 +476,7 @@ pub fn help(terminal: &mut Term) -> Result<()> {
 
         let paragraph = ratatui::widgets::Paragraph::new(lines).block(
             Block::default()
-                .title(" sonitus — help ")
+                .title(" termwave — help ")
                 .title_bottom(" press any key to close ")
                 .borders(Borders::ALL)
                 .padding(Padding::new(2, 2, 1, 1)),
@@ -508,7 +508,7 @@ pub fn draw_spectrum(
     let theme_name = theme.name;
     let num_bars = bars.len();
     let fps_str = actual_fps.map(|f| format!(" {}fps", f)).unwrap_or_default();
-    let title = format!(" sonitus — spectrum [{}] ({} bars){} ", theme_name, num_bars, fps_str);
+    let title = format!(" termwave — spectrum [{}] ({} bars){} ", theme_name, num_bars, fps_str);
     let bottom = format!(" {} | ? help ", device);
 
     terminal.draw(|frame| {
@@ -570,7 +570,7 @@ pub fn draw_spectrum(
 pub fn draw_wave(terminal: &mut Term, samples: &[f32], theme: &Theme, device: &str, actual_fps: Option<u32>) -> Result<()> {
     let color = theme.wave_color;
     let fps_str = actual_fps.map(|f| format!(" {}fps", f)).unwrap_or_default();
-    let title = format!(" sonitus — waveform{} ", fps_str);
+    let title = format!(" termwave — waveform{} ", fps_str);
     let bottom = format!(" {} | ? help ", device);
     draw_wave_inner(terminal, samples, &title, &bottom, color)
 }
@@ -584,7 +584,7 @@ pub fn draw_scope(terminal: &mut Term, samples: &[f32], theme: &Theme, device: &
 
     let triggered = &samples[trigger_offset..];
     let fps_str = actual_fps.map(|f| format!(" {}fps", f)).unwrap_or_default();
-    let title = format!(" sonitus — oscilloscope{} ", fps_str);
+    let title = format!(" termwave — oscilloscope{} ", fps_str);
     let bottom = format!(" {} | ? help ", device);
     draw_wave_inner(terminal, triggered, &title, &bottom, theme.scope_color)
 }
@@ -638,7 +638,7 @@ pub fn draw_stereo(
     let theme_name = theme.name;
     let num_bars = left_bars.len();
     let fps_str = actual_fps.map(|f| format!(" {}fps", f)).unwrap_or_default();
-    let title = format!(" sonitus — stereo [{}] ({} bars){} ", theme_name, num_bars, fps_str);
+    let title = format!(" termwave — stereo [{}] ({} bars){} ", theme_name, num_bars, fps_str);
     let bottom = format!(" {} | ? help ", device);
 
     terminal.draw(|frame| {

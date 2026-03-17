@@ -43,12 +43,12 @@ test:
 install:
     cargo install --path .
     cd tap && swift build -c release
-    cp tap/.build/release/sonitus-tap ~/.cargo/bin/
+    cp tap/.build/release/termwave-tap ~/.cargo/bin/
 
 # Uninstall
 uninstall:
-    cargo uninstall sonitus
-    rm -f ~/.cargo/bin/sonitus-tap
+    cargo uninstall termwave
+    rm -f ~/.cargo/bin/termwave-tap
 
 # Clean build artifacts
 clean:

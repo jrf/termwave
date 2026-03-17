@@ -3,7 +3,7 @@ import ScreenCaptureKit
 import CoreMedia
 import AVFoundation
 
-// sonitus-tap: Captures system audio via ScreenCaptureKit and writes raw f32
+// termwave-tap: Captures system audio via ScreenCaptureKit and writes raw f32
 // PCM samples to stdout (native endian). Sends interleaved stereo (L, R, L, R...)
 // by default, or mono with --mono. Requires macOS 13+.
 

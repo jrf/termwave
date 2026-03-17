@@ -2,11 +2,11 @@
 import PackageDescription
 
 let package = Package(
-    name: "sonitus-tap",
+    name: "termwave-tap",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
-            name: "sonitus-tap",
+            name: "termwave-tap",
             path: "Sources",
             linkerSettings: [
                 .linkedFramework("ScreenCaptureKit"),
