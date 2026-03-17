@@ -260,13 +260,19 @@ pub struct Settings {
     pub theme_idx: usize,
     /// If true, color by bar position; if false, color by amplitude.
     pub gradient_by_position: bool,
+    /// Number of bars (0 = auto-fill terminal width).
+    pub bars: usize,
+    /// Width of each bar in terminal columns (1–8).
+    pub bar_width: usize,
+    /// Spacing between bars in terminal columns (0–4).
+    pub bar_spacing: usize,
 }
 
 /// Show settings menu. Returns updated settings.
 pub fn settings_menu(terminal: &mut Term, settings: &Settings, themes: &[Theme]) -> Result<Option<Settings>> {
     let mut current = settings.clone();
     let mut selected: usize = 0;
-    let num_items = 5;
+    let num_items = 8;
 
     loop {
         let theme = &themes[current.theme_idx.min(themes.len() - 1)];
@@ -316,6 +322,27 @@ pub fn settings_menu(terminal: &mut Term, settings: &Settings, themes: &[Theme])
                         Style::default().fg(Color::Cyan),
                     ),
                     Span::raw(if current.gradient_by_position { "[position]" } else { "[amplitude]" }),
+                ])),
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("  {:16}", "Bars"),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    Span::raw(if current.bars == 0 { "auto".to_string() } else { format!("{}", current.bars) }),
+                ])),
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("  {:16}", "Bar width"),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    Span::raw(format!("{}", current.bar_width)),
+                ])),
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("  {:16}", "Bar spacing"),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    Span::raw(format!("{}", current.bar_spacing)),
                 ])),
             ]
             .into_iter()
@@ -409,6 +436,31 @@ fn adjust_setting(settings: &mut Settings, idx: usize, direction: i32, num_theme
             // Gradient mode: toggle
             settings.gradient_by_position = !settings.gradient_by_position;
         }
+        5 => {
+            // Bars: 0 = auto, 8–256 in steps of 8
+            if settings.bars == 0 && direction > 0 {
+                // already at auto (max), no-op
+            } else if settings.bars == 0 && direction < 0 {
+                settings.bars = 256;
+            } else {
+                let new = settings.bars as i32 + direction * 8;
+                if new <= 0 {
+                    settings.bars = 0; // wrap to auto
+                } else {
+                    settings.bars = (new as usize).clamp(8, 256);
+                }
+            }
+        }
+        6 => {
+            // Bar width: 1–8
+            settings.bar_width =
+                (settings.bar_width as i32 + direction).clamp(1, 8) as usize;
+        }
+        7 => {
+            // Bar spacing: 0–4
+            settings.bar_spacing =
+                (settings.bar_spacing as i32 + direction).clamp(0, 4) as usize;
+        }
         _ => {}
     }
 }
@@ -426,7 +478,7 @@ pub fn help(terminal: &mut Term) -> Result<()> {
         ("?", "Show this help"),
         ("d", "Select audio device"),
         ("t", "Select color theme"),
-        ("s", "Settings (smoothing, monstercat, noise)"),
+        ("s", "Settings (smoothing, noise, bar width/spacing)"),
         ("m", "Cycle visualization mode"),
         ("Up / +", "More bars"),
         ("Down / -", "Fewer bars"),
@@ -442,6 +494,8 @@ pub fn help(terminal: &mut Term) -> Result<()> {
         ("--low-freq N", "Low frequency cutoff in Hz (default: 20)"),
         ("--high-freq N", "High frequency cutoff in Hz (default: 20000)"),
         ("--noise-floor N", "Noise gate threshold (default: 0.0)"),
+        ("--bar-width N", "Bar width in columns, 1–8 (default: 2)"),
+        ("--bar-spacing N", "Bar spacing in columns, 0–4 (default: 1)"),
     ];
 
     terminal.draw(|frame| {
@@ -497,6 +551,7 @@ pub fn help(terminal: &mut Term) -> Result<()> {
 
 /// Draw spectrum bars using Unicode block elements (▁▂▃▄▅▆▇█) for 1/8th-cell
 /// vertical resolution.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_spectrum(
     terminal: &mut Term,
     bars: &[f32],
@@ -504,6 +559,8 @@ pub fn draw_spectrum(
     device: &str,
     gradient_by_position: bool,
     actual_fps: Option<u32>,
+    bar_width: usize,
+    bar_spacing: usize,
 ) -> Result<()> {
     let theme_name = theme.name;
     let num_bars = bars.len();
@@ -522,24 +579,31 @@ pub fn draw_spectrum(
 
         let buf = frame.buffer_mut();
         let max_val = bars.iter().cloned().fold(0.0f32, f32::max).max(0.001);
-        let bar_w = (inner.width as usize / num_bars.max(1)).max(1);
+        let bar_w = bar_width;
+        let stride = bar_w + bar_spacing;
+        // Center bars within the available width
+        let total_w = if num_bars > 0 { num_bars * bar_w + (num_bars - 1) * bar_spacing } else { 0 };
+        let x_offset = inner.x + ((inner.width as usize).saturating_sub(total_w) / 2) as u16;
+
+        let height = inner.height as f32;
 
         for (i, &v) in bars.iter().enumerate() {
             let normalized = v / max_val;
-            let color_val = if gradient_by_position {
-                i as f32 / (num_bars - 1).max(1) as f32
-            } else {
-                normalized
-            };
-            let color = theme.bar_color(color_val);
 
             // Total height in 1/8ths of a cell
-            let eighths = (normalized * inner.height as f32 * 8.0) as usize;
+            let eighths = (normalized * height * 8.0) as usize;
             let full_cells = eighths / 8;
             let remainder = eighths % 8;
 
-            let x_start = inner.x + (i * bar_w) as u16;
+            let x_start = x_offset + (i * stride) as u16;
             let x_end = (x_start + bar_w as u16).min(inner.x + inner.width);
+
+            // Horizontal position for gradient_by_position mode
+            let h_color = if gradient_by_position {
+                Some(theme.bar_color(i as f32 / (num_bars - 1).max(1) as f32))
+            } else {
+                None
+            };
 
             // Draw from bottom up
             for row in 0..inner.height {
@@ -552,10 +616,14 @@ pub fn draw_spectrum(
                     ' '
                 };
 
-                for x in x_start..x_end {
-                    let cell = &mut buf[(x, y)];
-                    cell.set_char(ch);
-                    if ch != ' ' {
+                if ch != ' ' {
+                    // Color by vertical position (bottom=0, top=1) or horizontal position
+                    let color = h_color.unwrap_or_else(|| {
+                        theme.bar_color(row as f32 / (height - 1.0).max(1.0))
+                    });
+                    for x in x_start..x_end {
+                        let cell = &mut buf[(x, y)];
+                        cell.set_char(ch);
                         cell.set_fg(color);
                     }
                 }
@@ -626,6 +694,7 @@ fn draw_wave_inner(terminal: &mut Term, samples: &[f32], title: &str, bottom: &s
 
 /// Draw stereo spectrum: left channel bars grow up from center, right channel grows down.
 /// Uses Unicode block elements for the upper half (▁▂▃▄▅▆▇█) and full blocks for the lower half.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_stereo(
     terminal: &mut Term,
     left_bars: &[f32],
@@ -634,6 +703,8 @@ pub fn draw_stereo(
     device: &str,
     gradient_by_position: bool,
     actual_fps: Option<u32>,
+    bar_width: usize,
+    bar_spacing: usize,
 ) -> Result<()> {
     let theme_name = theme.name;
     let num_bars = left_bars.len();
@@ -653,7 +724,10 @@ pub fn draw_stereo(
         let buf = frame.buffer_mut();
         let left_max = left_bars.iter().cloned().fold(0.0f32, f32::max).max(0.001);
         let right_max = right_bars.iter().cloned().fold(0.0f32, f32::max).max(0.001);
-        let bar_w = (inner.width as usize / num_bars.max(1)).max(1);
+        let bar_w = bar_width;
+        let stride = bar_w + bar_spacing;
+        let total_w = if num_bars > 0 { num_bars * bar_w + (num_bars - 1) * bar_spacing } else { 0 };
+        let x_offset = inner.x + ((inner.width as usize).saturating_sub(total_w) / 2) as u16;
 
         // Split inner area into upper half (left channel) and lower half (right channel)
         let half_h = inner.height / 2;
@@ -667,21 +741,22 @@ pub fn draw_stereo(
         }
 
         // Left channel: bars grow upward from center using block elements
+        let half_h_f = half_h as f32;
         for (i, &v) in left_bars.iter().enumerate() {
             let normalized = (v / left_max).clamp(0.0, 1.0);
-            let color_val = if gradient_by_position {
-                i as f32 / (num_bars - 1).max(1) as f32
-            } else {
-                normalized
-            };
-            let color = theme.bar_color(color_val);
 
-            let eighths = (normalized * half_h as f32 * 8.0) as usize;
+            let eighths = (normalized * half_h_f * 8.0) as usize;
             let full_cells = eighths / 8;
             let remainder = eighths % 8;
 
-            let x_start = inner.x + (i * bar_w) as u16;
+            let x_start = x_offset + (i * stride) as u16;
             let x_end = (x_start + bar_w as u16).min(inner.x + inner.width);
+
+            let h_color = if gradient_by_position {
+                Some(theme.bar_color(i as f32 / (num_bars - 1).max(1) as f32))
+            } else {
+                None
+            };
 
             // Draw from center upward
             for row in 0..half_h {
@@ -694,10 +769,13 @@ pub fn draw_stereo(
                     ' '
                 };
 
-                for x in x_start..x_end {
-                    let cell = &mut buf[(x, y)];
-                    cell.set_char(ch);
-                    if ch != ' ' {
+                if ch != ' ' {
+                    let color = h_color.unwrap_or_else(|| {
+                        theme.bar_color(row as f32 / (half_h_f - 1.0).max(1.0))
+                    });
+                    for x in x_start..x_end {
+                        let cell = &mut buf[(x, y)];
+                        cell.set_char(ch);
                         cell.set_fg(color);
                     }
                 }
@@ -710,25 +788,29 @@ pub fn draw_stereo(
         // those fill from the bottom, and without knowing the terminal background
         // color we can't invert them cleanly.
         let lower_h = inner.height - half_h - 1; // -1 for center line
+        let lower_h_f = lower_h as f32;
         for (i, &v) in right_bars.iter().enumerate() {
             let normalized = (v / right_max).clamp(0.0, 1.0);
-            let color_val = if gradient_by_position {
-                i as f32 / (num_bars - 1).max(1) as f32
-            } else {
-                normalized
-            };
-            let color = theme.bar_color(color_val);
 
             // Height in half-cells (2x resolution via ▀)
-            let halves = (normalized * lower_h as f32 * 2.0) as usize;
+            let halves = (normalized * lower_h_f * 2.0) as usize;
             let full_cells = halves / 2;
             let has_half = halves % 2 == 1;
 
-            let x_start = inner.x + (i * bar_w) as u16;
+            let x_start = x_offset + (i * stride) as u16;
             let x_end = (x_start + bar_w as u16).min(inner.x + inner.width);
+
+            let h_color = if gradient_by_position {
+                Some(theme.bar_color(i as f32 / (num_bars - 1).max(1) as f32))
+            } else {
+                None
+            };
 
             for row in 0..lower_h {
                 let y = center_y + 1 + row;
+                let color = h_color.unwrap_or_else(|| {
+                    theme.bar_color(row as f32 / (lower_h_f - 1.0).max(1.0))
+                });
 
                 if (row as usize) < full_cells {
                     for x in x_start..x_end {
@@ -737,8 +819,6 @@ pub fn draw_stereo(
                         cell.set_fg(color);
                     }
                 } else if (row as usize) == full_cells && has_half {
-                    // Tip: ▀ (upper half block) — top half is fg (bar color),
-                    // bottom half inherits terminal background naturally.
                     for x in x_start..x_end {
                         let cell = &mut buf[(x, y)];
                         cell.set_char('▀');

@@ -56,6 +56,14 @@ struct Cli {
     #[arg(long)]
     gradient_by_position: bool,
 
+    /// Width of each bar in terminal columns (1–8)
+    #[arg(long)]
+    bar_width: Option<usize>,
+
+    /// Spacing between bars in terminal columns (0–4)
+    #[arg(long)]
+    bar_spacing: Option<usize>,
+
     /// List available audio input devices
     #[arg(long)]
     list_devices: bool,
@@ -148,6 +156,9 @@ fn save_state(
     cfg.mode = mode.as_str().to_string();
 
     cfg.gradient_by_position = settings.gradient_by_position;
+    cfg.bars = settings.bars;
+    cfg.bar_width = settings.bar_width;
+    cfg.bar_spacing = settings.bar_spacing;
 
     let _ = config::save(cfg);
 }
@@ -194,6 +205,12 @@ fn main() -> Result<()> {
     if cli.gradient_by_position {
         cfg.gradient_by_position = true;
     }
+    if let Some(w) = cli.bar_width {
+        cfg.bar_width = w.clamp(1, 8);
+    }
+    if let Some(s) = cli.bar_spacing {
+        cfg.bar_spacing = s.clamp(0, 4);
+    }
 
 
     let mut mode = Mode::from_str(&cfg.mode);
@@ -213,7 +230,7 @@ fn main() -> Result<()> {
     let mut terminal = render::init()?;
     let fps = cfg.fps.max(1);
     let frame_duration = Duration::from_millis(1000 / fps);
-    let mut desired_bars = cfg.bars.clamp(MIN_BARS, MAX_BARS);
+    let mut desired_bars = if cfg.bars == 0 { MAX_BARS } else { cfg.bars.clamp(MIN_BARS, MAX_BARS) };
     let mut num_bars = desired_bars;
     let mut prev_bars: Vec<f32> = vec![0.0; num_bars];
     let mut prev_left: Vec<f32> = vec![0.0; num_bars];
@@ -232,6 +249,9 @@ fn main() -> Result<()> {
         noise_floor: cfg.noise_floor,
         theme_idx,
         gradient_by_position: cfg.gradient_by_position,
+        bars: cfg.bars,
+        bar_width: cfg.bar_width.clamp(1, 8),
+        bar_spacing: cfg.bar_spacing.clamp(0, 4),
     };
 
     let analyzer = analysis::SpectrumAnalyzer::new();
@@ -263,9 +283,12 @@ fn main() -> Result<()> {
             fps_timer = Instant::now();
         }
 
-        // Clamp bar count to terminal width (shrink if needed, restore when space returns)
+        // Compute bar count: fill the terminal width based on bar_width + bar_spacing.
+        // desired_bars acts as an upper limit (user can reduce with Down/-).
         let term_w = terminal.size()?.width.saturating_sub(2) as usize;
-        let effective_bars = desired_bars.min(term_w).max(MIN_BARS);
+        let stride = settings.bar_width + settings.bar_spacing;
+        let max_fit = if stride > 0 { (term_w + settings.bar_spacing) / stride } else { term_w };
+        let effective_bars = desired_bars.min(max_fit).max(MIN_BARS);
         if effective_bars != num_bars {
             num_bars = effective_bars;
             prev_bars = vec![0.0; num_bars];
@@ -325,6 +348,7 @@ fn main() -> Result<()> {
                         settings = new_settings;
                         theme_idx = settings.theme_idx;
                         current_theme = &theme::THEMES[theme_idx];
+                        desired_bars = if settings.bars == 0 { MAX_BARS } else { settings.bars.clamp(MIN_BARS, MAX_BARS) };
                         save_state(&mut cfg, &settings, current_theme.name, num_bars, &mode);
                     }
                     None => break,
@@ -337,6 +361,7 @@ fn main() -> Result<()> {
             }
             render::Action::MoreBars => {
                 desired_bars = (desired_bars + BAR_STEP).min(MAX_BARS);
+                settings.bars = desired_bars;
                 num_bars = desired_bars;
                 prev_bars = vec![0.0; num_bars];
                 prev_left = vec![0.0; num_bars];
@@ -346,6 +371,7 @@ fn main() -> Result<()> {
             }
             render::Action::FewerBars => {
                 desired_bars = (desired_bars.saturating_sub(BAR_STEP)).max(MIN_BARS);
+                settings.bars = desired_bars;
                 num_bars = desired_bars;
                 prev_bars = vec![0.0; num_bars];
                 prev_left = vec![0.0; num_bars];
@@ -359,13 +385,20 @@ fn main() -> Result<()> {
         let dt = last_frame_time.elapsed().as_secs_f32().clamp(0.001, 0.1);
         last_frame_time = Instant::now();
 
-        // If no new audio data has arrived recently, zero the buffers so
-        // the display decays to silence instead of showing stale data.
-        let stale_timeout = Duration::from_millis(100);
-        if last_write.is_stale(stale_timeout) {
-            mono_buf.lock().unwrap().fill(0.0);
-            stereo.0.lock().unwrap().fill(0.0);
-            stereo.1.lock().unwrap().fill(0.0);
+        // Detect silence: if the buffer's energy is negligible, zero the
+        // smoothing state so bars fall via gravity instead of freezing.
+        {
+            let buf = mono_buf.lock().unwrap();
+            let rms = (buf.iter().map(|s| s * s).sum::<f32>() / buf.len() as f32).sqrt();
+            if rms < 1e-6 {
+                drop(buf);
+                prev_bars.fill(0.0);
+                prev_left.fill(0.0);
+                prev_right.fill(0.0);
+                autosens = analysis::AutoSensitivity::new();
+                autosens_l = analysis::AutoSensitivity::new();
+                autosens_r = analysis::AutoSensitivity::new();
+            }
         }
 
         match mode {
@@ -379,19 +412,18 @@ fn main() -> Result<()> {
                     &magnitudes, num_bars, sample_rate, low_freq, high_freq,
                 );
 
-                let mut smoothed = analysis::smooth(&prev_bars, &bars, settings.smoothing);
+                let mut smoothed = analysis::smooth(&prev_bars, &bars, settings.smoothing, dt);
                 if settings.monstercat {
                     analysis::monstercat(&mut smoothed, MONSTERCAT_STRENGTH);
                 }
-                // Store prev_bars before autosens so smoothing always operates
-                // on raw-scale values — not normalized ones that get re-inflated.
-                prev_bars = smoothed.clone();
-                autosens.apply(&mut smoothed);
                 if settings.noise_floor > 0.0 {
                     analysis::noise_gate(&mut smoothed, settings.noise_floor);
                 }
+                autosens.apply(&mut smoothed, dt);
+                // Store prev_bars before gravity so gravity doesn't feed back into smoothing
+                prev_bars = smoothed.clone();
                 gravity.apply(&mut smoothed, dt);
-                render::draw_spectrum(&mut terminal, &smoothed, current_theme, &device_name, settings.gradient_by_position, actual_fps)?;
+                render::draw_spectrum(&mut terminal, &smoothed, current_theme, &device_name, settings.gradient_by_position, actual_fps, settings.bar_width, settings.bar_spacing)?;
             }
             Mode::Stereo => {
                 let left_samples = {
@@ -415,31 +447,30 @@ fn main() -> Result<()> {
 
 
                 let mut smooth_l =
-                    analysis::smooth(&prev_left, &left_bars, settings.smoothing);
+                    analysis::smooth(&prev_left, &left_bars, settings.smoothing, dt);
                 let mut smooth_r =
-                    analysis::smooth(&prev_right, &right_bars, settings.smoothing);
+                    analysis::smooth(&prev_right, &right_bars, settings.smoothing, dt);
 
                 if settings.monstercat {
                     analysis::monstercat(&mut smooth_l, MONSTERCAT_STRENGTH);
                     analysis::monstercat(&mut smooth_r, MONSTERCAT_STRENGTH);
                 }
 
-                // Store before autosens so smoothing operates on raw-scale values.
-                prev_left = smooth_l.clone();
-                prev_right = smooth_r.clone();
-
-                autosens_l.apply(&mut smooth_l);
-                autosens_r.apply(&mut smooth_r);
-
                 if settings.noise_floor > 0.0 {
                     analysis::noise_gate(&mut smooth_l, settings.noise_floor);
                     analysis::noise_gate(&mut smooth_r, settings.noise_floor);
                 }
+
+                autosens_l.apply(&mut smooth_l, dt);
+                autosens_r.apply(&mut smooth_r, dt);
+                // Store before gravity so gravity doesn't feed back into smoothing
+                prev_left = smooth_l.clone();
+                prev_right = smooth_r.clone();
                 gravity_l.apply(&mut smooth_l, dt);
                 gravity_r.apply(&mut smooth_r, dt);
 
                 render::draw_stereo(
-                    &mut terminal, &smooth_l, &smooth_r, current_theme, &device_name, settings.gradient_by_position, actual_fps,
+                    &mut terminal, &smooth_l, &smooth_r, current_theme, &device_name, settings.gradient_by_position, actual_fps, settings.bar_width, settings.bar_spacing,
                 )?;
             }
             Mode::Wave => {

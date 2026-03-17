@@ -29,10 +29,6 @@ impl LastWriteTime {
         self.0.clone()
     }
 
-    /// Returns true if no samples have been written for longer than `timeout`.
-    pub fn is_stale(&self, timeout: std::time::Duration) -> bool {
-        self.0.lock().unwrap().elapsed() > timeout
-    }
 }
 
 /// Create a new shared sample buffer.

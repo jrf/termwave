@@ -94,15 +94,30 @@ pub fn bin_spectrum(
 }
 
 /// Smooth between consecutive frames to reduce flickering.
+/// Frame-rate independent: `factor` (0.0–0.99) is interpreted as the per-frame
+/// retention at 60fps, then converted to a time constant so behavior is
+/// consistent at any frame rate.
 ///
-/// `factor` controls decay: 0.0 = no smoothing, 0.9 = heavy smoothing.
-pub fn smooth(prev: &[f32], current: &[f32], factor: f32) -> Vec<f32> {
+/// `dt` is the time since the last frame in seconds.
+pub fn smooth(prev: &[f32], current: &[f32], factor: f32, dt: f32) -> Vec<f32> {
     if prev.len() != current.len() {
         return current.to_vec();
     }
+    // Convert user-facing factor (assumed at 60fps) to a time constant:
+    //   at 60fps, factor = e^(-dt_ref / τ)  →  τ = -dt_ref / ln(factor)
+    // Then compute the actual per-frame factor: e^(-dt / τ)
+    let alpha = if factor <= 0.0 {
+        0.0
+    } else if factor >= 1.0 {
+        1.0
+    } else {
+        let dt_ref = 1.0 / 60.0;
+        let tau = -dt_ref / factor.ln();
+        (-dt / tau).exp()
+    };
     prev.iter()
         .zip(current.iter())
-        .map(|(p, c)| p * factor + c * (1.0 - factor))
+        .map(|(p, c)| p * alpha + c * (1.0 - alpha))
         .collect()
 }
 
@@ -191,11 +206,12 @@ pub fn noise_gate(bars: &mut [f32], floor: f32) {
 
 /// Automatic sensitivity: tracks a rolling peak and normalizes bars
 /// so the display uses the full height regardless of volume.
+/// Frame-rate independent via exponential decay with a time constant.
 pub struct AutoSensitivity {
     peak: f32,
-    /// How fast the peak decays toward the current max (per frame).
-    /// Lower = slower decay = more stable. 0.01–0.05 typical.
-    decay: f32,
+    /// Time constant in seconds for peak decay. The peak decays to ~37%
+    /// of its value after this many seconds. ~0.3s gives responsive tracking.
+    tau: f32,
     /// Minimum peak to prevent division by tiny numbers during silence.
     min_peak: f32,
 }
@@ -204,22 +220,25 @@ impl AutoSensitivity {
     pub fn new() -> Self {
         Self {
             peak: 0.001,
-            decay: 0.08,
-            min_peak: 0.005,
+            tau: 0.33,
+            min_peak: 0.0001,
         }
     }
 
     /// Normalize bars in-place based on tracked peak.
+    /// `dt` is the time since the last frame in seconds.
     /// Returns the current sensitivity peak for diagnostics.
-    pub fn apply(&mut self, bars: &mut [f32]) -> f32 {
+    pub fn apply(&mut self, bars: &mut [f32], dt: f32) -> f32 {
         let current_max = bars.iter().cloned().fold(0.0f32, f32::max);
 
         // If current frame is louder, jump up immediately
         if current_max > self.peak {
             self.peak = current_max;
         } else {
-            // Slowly decay toward current level
-            self.peak = self.peak * (1.0 - self.decay) + current_max * self.decay;
+            // Exponential decay: peak approaches current_max with time constant tau.
+            // factor = e^(-dt/tau); at 60fps dt≈0.017, factor≈0.95 (similar to old 0.05 decay).
+            let factor = (-dt / self.tau).exp();
+            self.peak = self.peak * factor + current_max * (1.0 - factor);
         }
 
         let peak = self.peak.max(self.min_peak);
