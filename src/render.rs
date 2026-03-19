@@ -101,7 +101,7 @@ pub enum DeviceMenuResult {
 }
 
 /// Show an interactive device selection menu.
-pub fn device_menu(terminal: &mut Term, devices: &[String]) -> Result<DeviceMenuResult> {
+pub fn device_menu(terminal: &mut Term, devices: &[String], theme: &Theme) -> Result<DeviceMenuResult> {
     let mut selected: usize = 0;
     let total = devices.len() + 1;
 
@@ -109,11 +109,12 @@ pub fn device_menu(terminal: &mut Term, devices: &[String]) -> Result<DeviceMenu
         terminal.draw(|frame| {
             let area = frame.area();
 
+            let accent = theme.wave_color;
             let items: Vec<ListItem> = std::iter::once(ListItem::new(Line::from(vec![
-                Span::raw("  Default device"),
+                Span::styled("  Default device", Style::default().fg(accent)),
             ])))
             .chain(devices.iter().map(|name| {
-                ListItem::new(Line::from(vec![Span::raw(format!("  {}", name))]))
+                ListItem::new(Line::from(vec![Span::styled(format!("  {}", name), Style::default().fg(accent))]))
             }))
             .enumerate()
             .map(|(i, item)| {
@@ -129,11 +130,16 @@ pub fn device_menu(terminal: &mut Term, devices: &[String]) -> Result<DeviceMenu
             })
             .collect();
 
+            let border_color = theme.gradient[theme.gradient.len() / 2];
             let list = List::new(items).block(
                 Block::default()
-                    .title(" termwave — select audio device ")
-                    .title_bottom(" ↑/↓ navigate  Enter select  Esc back  q quit ")
+                    .title(Span::styled(" termwave — select audio device ", Style::default().fg(border_color)))
+                    .title_bottom(Span::styled(
+                        " ↑/↓ navigate  Enter select  Esc back  q quit ",
+                        Style::default().fg(Color::DarkGray),
+                    ))
                     .borders(Borders::ALL)
+                    .border_style(Style::default().fg(border_color))
                     .padding(Padding::vertical(1)),
             );
 
@@ -219,11 +225,17 @@ pub fn theme_menu(terminal: &mut Term, themes: &[Theme], current_idx: usize) -> 
                 })
                 .collect();
 
+            let sel_theme = &themes[selected];
+            let border_color = sel_theme.gradient[sel_theme.gradient.len() / 2];
             let list = List::new(items).block(
                 Block::default()
-                    .title(" termwave — select theme ")
-                    .title_bottom(" ↑/↓ navigate  Enter select  Esc back  q quit ")
+                    .title(Span::styled(" termwave — select theme ", Style::default().fg(border_color)))
+                    .title_bottom(Span::styled(
+                        " ↑/↓ navigate  Enter select  Esc back  q quit ",
+                        Style::default().fg(Color::DarkGray),
+                    ))
                     .borders(Borders::ALL)
+                    .border_style(Style::default().fg(border_color))
                     .padding(Padding::vertical(1)),
             );
 
@@ -288,6 +300,8 @@ pub fn settings_menu(terminal: &mut Term, settings: &Settings, themes: &[Theme])
 
     loop {
         let theme = &themes[current.theme_idx.min(themes.len() - 1)];
+        let accent = theme.wave_color;
+        let border_color = theme.gradient[theme.gradient.len() / 2];
 
         terminal.draw(|frame| {
             let area = frame.area();
@@ -298,7 +312,7 @@ pub fn settings_menu(terminal: &mut Term, settings: &Settings, themes: &[Theme])
             // Theme swatch
             let mut theme_spans: Vec<Span> = vec![Span::styled(
                 format!("  {:16}", "Theme"),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(accent),
             )];
             for &color in theme.gradient {
                 theme_spans.push(Span::styled("██", Style::default().fg(color)));
@@ -310,49 +324,49 @@ pub fn settings_menu(terminal: &mut Term, settings: &Settings, themes: &[Theme])
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         format!("  {:16}", "Smoothing"),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(accent),
                     ),
                     Span::raw(format!("{} {:.2}", smoothing_bar, current.smoothing)),
                 ])),
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         format!("  {:16}", "Monstercat"),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(accent),
                     ),
                     Span::raw(if current.monstercat { "[ON]" } else { "[OFF]" }),
                 ])),
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         format!("  {:16}", "Noise floor"),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(accent),
                     ),
                     Span::raw(format!("{} {:.4}", noise_bar, current.noise_floor)),
                 ])),
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         format!("  {:16}", "Gradient"),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(accent),
                     ),
                     Span::raw(if current.gradient_by_position { "[position]" } else { "[amplitude]" }),
                 ])),
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         format!("  {:16}", "Bar width"),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(accent),
                     ),
                     Span::raw(format!("{}", current.bar_width)),
                 ])),
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         format!("  {:16}", "Bar spacing"),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(accent),
                     ),
                     Span::raw(format!("{}", current.bar_spacing)),
                 ])),
                 ListItem::new(Line::from(vec![
                     Span::styled(
                         format!("  {:16}", "Sensitivity"),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(accent),
                     ),
                     Span::raw(format!("{}%", current.sensitivity)),
                 ])),
@@ -374,9 +388,13 @@ pub fn settings_menu(terminal: &mut Term, settings: &Settings, themes: &[Theme])
 
             let list = List::new(items).block(
                 Block::default()
-                    .title(" termwave — settings ")
-                    .title_bottom(" ↑/↓ navigate  ←/→ adjust  Enter/Space toggle  Esc back ")
+                    .title(Span::styled(" termwave — settings ", Style::default().fg(border_color)))
+                    .title_bottom(Span::styled(
+                        " ↑/↓ navigate  ←/→ adjust  Enter/Space toggle  Esc back ",
+                        Style::default().fg(Color::DarkGray),
+                    ))
                     .borders(Borders::ALL)
+                    .border_style(Style::default().fg(border_color))
                     .padding(Padding::new(2, 2, 1, 1)),
             );
 
@@ -478,7 +496,7 @@ fn slider_bar(value: f32, min: f32, max: f32, width: usize) -> String {
 }
 
 /// Show help overlay. Blocks until any key is pressed.
-pub fn help(terminal: &mut Term) -> Result<()> {
+pub fn help(terminal: &mut Term, theme: &Theme) -> Result<()> {
     let bindings = [
         ("?", "Show this help"),
         ("d", "Select audio device"),
@@ -503,6 +521,9 @@ pub fn help(terminal: &mut Term) -> Result<()> {
         ("--bar-spacing N", "Bar spacing in columns, 0–4 (default: 1)"),
     ];
 
+    let accent = theme.wave_color;
+    let border_color = theme.gradient[theme.gradient.len() / 2];
+
     terminal.draw(|frame| {
         let area = frame.area();
 
@@ -515,7 +536,7 @@ pub fn help(terminal: &mut Term) -> Result<()> {
         lines.push(Line::from(""));
         for (key, desc) in &bindings {
             lines.push(Line::from(vec![
-                Span::styled(format!("  {:12}", key), Style::default().fg(Color::Cyan)),
+                Span::styled(format!("  {:12}", key), Style::default().fg(accent)),
                 Span::raw(*desc),
             ]));
         }
@@ -528,16 +549,20 @@ pub fn help(terminal: &mut Term) -> Result<()> {
         lines.push(Line::from(""));
         for (flag, desc) in &modes {
             lines.push(Line::from(vec![
-                Span::styled(format!("  {:20}", flag), Style::default().fg(Color::Cyan)),
+                Span::styled(format!("  {:20}", flag), Style::default().fg(accent)),
                 Span::raw(*desc),
             ]));
         }
 
         let paragraph = ratatui::widgets::Paragraph::new(lines).block(
             Block::default()
-                .title(" termwave — help ")
-                .title_bottom(" press any key to close ")
+                .title(Span::styled(" termwave — help ", Style::default().fg(border_color)))
+                .title_bottom(Span::styled(
+                    " press any key to close ",
+                    Style::default().fg(Color::DarkGray),
+                ))
                 .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color))
                 .padding(Padding::new(2, 2, 1, 1)),
         );
 

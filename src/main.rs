@@ -311,7 +311,7 @@ fn main() -> Result<()> {
             }
             render::Action::SelectDevice => {
                 let devices = audio::list_devices()?;
-                match render::device_menu(&mut terminal, &devices)? {
+                match render::device_menu(&mut terminal, &devices, current_theme)? {
                     render::DeviceMenuResult::Selected(new_device) => {
                         drop(capture);
                         let (sr, handle) =
