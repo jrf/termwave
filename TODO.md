@@ -33,3 +33,5 @@
 - [x] Bar width and spacing customization (settings menu + CLI flags)
 - [x] Sensitivity control with title bar display
 - [x] Config persistence to `~/.config/termwave/config.toml`
+- [x] Theme-aware UI: all menus, borders, titles, and overlays use the current theme's colors
+- [x] Non-blocking settings overlay: settings panel renders at 50% terminal size with live visualizer behind it, changes apply in real time

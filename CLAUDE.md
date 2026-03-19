@@ -36,7 +36,7 @@ Two-process design: the Rust binary handles all visualization, the Swift binary 
 **Key modules**:
 - `audio.rs` — Two capture paths: `start_capture` (cpal device input) and `start_tap` (spawns `termwave-tap` subprocess, reads raw f32 from its stdout). `CaptureHandle` enum keeps the stream/child alive via RAII.
 - `analysis.rs` — Hann-windowed FFT (`FFT_SIZE = 8192`), logarithmic frequency binning, exponential frame smoothing, monstercat envelope smoothing, noise gate, `Gravity` (frame-rate independent bar fall-off), and `AutoSensitivity` (auto-gain normalization).
-- `render.rs` — All ratatui terminal UI: spectrum (BarChart), waveform/oscilloscope (Canvas with line segments), stereo (Canvas with mirrored bars), plus interactive menus (device, theme, settings, help).
+- `render.rs` — All ratatui terminal UI. Visualizer functions (`render_spectrum`, `render_wave`, `render_scope`, `render_stereo`) take a `&mut Frame` so they can be composed in a single `terminal.draw` call. Settings is a non-blocking overlay (`SettingsState` + `render_settings`) rendered on top of the visualizer. Device menu and help screen are still blocking. All UI chrome (borders, titles, labels) uses theme colors.
 - `theme.rs` — Static `THEMES` array of gradient color definitions. Each theme has 8 gradient stops (low→high amplitude), a wave_color, and a scope_color.
 - `config.rs` — Persists settings to `~/.config/termwave/config.toml` via serde/toml. Settings changed at runtime (theme, smoothing, etc.) are saved automatically.
 

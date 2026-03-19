@@ -36,10 +36,9 @@ termwave --list-devices         # list available audio devices
 | `?` | Help |
 | `m` | Cycle visualization mode |
 | `d` | Select audio device |
-| `t` | Select color theme |
-| `s` | Settings menu |
-| `Up` / `+` | More bars |
-| `Down` / `-` | Fewer bars |
+| `s` | Settings (theme, smoothing, noise, etc.) |
+| `Up` / `Down` | Increase / decrease sensitivity |
+| `Right` / `Left` | More / fewer bars |
 | `q` / `Esc` | Quit |
 
 ## Modes
@@ -56,7 +55,7 @@ termwave --list-devices         # list available audio devices
 
 ## Themes
 
-Seven built-in color themes, selectable via `--theme` or `t` at runtime:
+Seven built-in color themes, selectable via `--theme` or in the settings menu (`s`):
 
 - **classic** — blue, cyan, green, yellow, red
 - **fire** — dark red to bright yellow
@@ -68,12 +67,16 @@ Seven built-in color themes, selectable via `--theme` or `t` at runtime:
 
 ## Settings
 
-Press `s` to open the settings menu. Adjust with arrow keys or vim bindings:
+Press `s` to open the settings overlay (visualizer keeps running behind it). Adjust with arrow keys or vim bindings:
 
+- **Theme** — cycle through color themes with live preview
 - **Smoothing** — temporal smoothing between frames (0.0–0.99)
 - **Monstercat** — smooth envelope connecting bar tops
 - **Noise floor** — threshold to zero out quiet bars
 - **Gradient mode** — color by amplitude or by bar position
+- **Bar width** — width of each bar in columns (1–8)
+- **Bar spacing** — gap between bars (0–4)
+- **Sensitivity** — manual gain adjustment (10–500%)
 
 All settings persist to `~/.config/termwave/config.toml`.
 
