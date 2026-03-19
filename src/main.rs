@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use clap::Parser;
+use crossterm::event::KeyCode;
 
 #[derive(Parser)]
 #[command(name = "termwave", about = "Terminal audio visualizer")]
@@ -275,6 +276,9 @@ fn main() -> Result<()> {
     let mut last_restart_attempt: Option<Instant> = None;
     const RESTART_COOLDOWN: Duration = Duration::from_secs(2);
 
+    // Theme picker overlay state
+    let mut theme_picker: Option<render::ThemePicker> = None;
+
     loop {
         let frame_start = Instant::now();
 
@@ -298,6 +302,34 @@ fn main() -> Result<()> {
             prev_left = vec![0.0; num_bars];
             prev_right = vec![0.0; num_bars];
         }
+
+        // When theme picker is open, handle its input separately
+        if let Some(ref mut picker) = theme_picker {
+            if let Some(key) = render::poll_key(Duration::ZERO)? {
+                match key {
+                    KeyCode::Up | KeyCode::Char('k') => picker.up(),
+                    KeyCode::Down | KeyCode::Char('j') => picker.down(),
+                    KeyCode::Enter => {
+                        theme_idx = picker.selected;
+                        current_theme = &theme::THEMES[theme_idx];
+                        settings.theme_idx = theme_idx;
+                        save_state(&mut cfg, &settings, current_theme.name, &mode);
+                        theme_picker = None;
+                    }
+                    KeyCode::Esc | KeyCode::Char('t') => {
+                        // Revert to the theme that was active before opening the picker
+                        current_theme = &theme::THEMES[theme_idx];
+                        theme_picker = None;
+                    }
+                    KeyCode::Char('q') => break,
+                    _ => {}
+                }
+                // Live-preview the selected theme while browsing
+                if let Some(ref picker) = theme_picker {
+                    current_theme = &theme::THEMES[picker.selected];
+                }
+            }
+        } else {
 
         match render::poll_input(Duration::ZERO)? {
             render::Action::Quit => break,
@@ -333,17 +365,8 @@ fn main() -> Result<()> {
                 continue;
             }
             render::Action::SelectTheme => {
-                match render::theme_menu(&mut terminal, theme::THEMES, theme_idx)? {
-                    render::ThemeMenuResult::Selected(idx) => {
-                        theme_idx = idx;
-                        current_theme = &theme::THEMES[idx];
-                        settings.theme_idx = idx;
-                        save_state(&mut cfg, &settings, current_theme.name, &mode);
-                    }
-                    render::ThemeMenuResult::Quit => break,
-                    render::ThemeMenuResult::Cancelled => {}
-                }
-                continue;
+                theme_picker = Some(render::ThemePicker::new(theme_idx, theme::THEMES.len()));
+                current_theme = &theme::THEMES[theme_idx];
             }
             render::Action::Settings => {
                 match render::settings_menu(&mut terminal, &settings, theme::THEMES)? {
@@ -358,7 +381,7 @@ fn main() -> Result<()> {
                 continue;
             }
             render::Action::Help => {
-                render::help(&mut terminal)?;
+                render::help(&mut terminal, current_theme)?;
                 continue;
             }
             render::Action::SensUp => {
@@ -389,6 +412,8 @@ fn main() -> Result<()> {
             }
             render::Action::None => {}
         }
+
+        } // end else (theme picker not open)
 
         let dt = last_frame_time.elapsed().as_secs_f32().clamp(0.001, 0.1);
         last_frame_time = Instant::now();
@@ -548,6 +573,11 @@ fn main() -> Result<()> {
                 };
                 render::draw_scope(&mut terminal, &samples, current_theme, &status, actual_fps)?;
             }
+        }
+
+        // Draw theme picker overlay on top of the visualizer
+        if let Some(ref picker) = theme_picker {
+            render::draw_theme_overlay(&mut terminal, theme::THEMES, picker)?;
         }
 
         let elapsed = frame_start.elapsed();

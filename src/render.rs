@@ -45,6 +45,23 @@ pub fn cleanup(terminal: &mut Term) -> Result<()> {
     Ok(())
 }
 
+/// Poll for a key press without mapping to an action.
+/// Returns the key code if a key was pressed, None otherwise.
+pub fn poll_key(timeout: Duration) -> Result<Option<KeyCode>> {
+    if event::poll(timeout)? {
+        if let Event::Key(key) = event::read()? {
+            if key.kind == KeyEventKind::Press {
+                // Handle Ctrl+C as quit
+                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    return Ok(Some(KeyCode::Char('q')));
+                }
+                return Ok(Some(key.code));
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// Action returned from input polling.
 pub enum Action {
     None,
@@ -185,94 +202,85 @@ pub fn device_menu(terminal: &mut Term, devices: &[String], theme: &Theme) -> Re
     }
 }
 
-/// Result of the theme menu interaction.
-pub enum ThemeMenuResult {
-    Selected(usize),
-    Cancelled,
-    Quit,
+/// State for the theme picker overlay (rendered alongside the visualizer).
+pub struct ThemePicker {
+    pub selected: usize,
+    pub total: usize,
 }
 
-/// Show an interactive theme selection menu with preview swatches.
-pub fn theme_menu(terminal: &mut Term, themes: &[Theme], current_idx: usize) -> Result<ThemeMenuResult> {
-    let mut selected = current_idx;
-    let total = themes.len();
+impl ThemePicker {
+    pub fn new(current_idx: usize, total: usize) -> Self {
+        Self { selected: current_idx, total }
+    }
 
-    loop {
-        terminal.draw(|frame| {
-            let area = frame.area();
+    pub fn up(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
 
-            let items: Vec<ListItem> = themes
-                .iter()
-                .enumerate()
-                .map(|(i, theme)| {
-                    // Build a swatch showing the gradient colors
-                    let mut spans: Vec<Span> = vec![Span::raw("  ")];
-                    for &color in theme.gradient {
-                        spans.push(Span::styled("██", Style::default().fg(color)));
-                    }
-                    spans.push(Span::raw(format!("  {}", theme.name)));
-
-                    let item = ListItem::new(Line::from(spans));
-                    if i == selected {
-                        item.style(
-                            Style::default()
-                                .bg(Color::Rgb(40, 40, 40))
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    } else {
-                        item
-                    }
-                })
-                .collect();
-
-            let sel_theme = &themes[selected];
-            let border_color = sel_theme.gradient[sel_theme.gradient.len() / 2];
-            let list = List::new(items).block(
-                Block::default()
-                    .title(Span::styled(" termwave — select theme ", Style::default().fg(border_color)))
-                    .title_bottom(Span::styled(
-                        " ↑/↓ navigate  Enter select  Esc back  q quit ",
-                        Style::default().fg(Color::DarkGray),
-                    ))
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(border_color))
-                    .padding(Padding::vertical(1)),
-            );
-
-            frame.render_widget(list, area);
-        })?;
-
-        if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
-                match key.code {
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        selected = selected.saturating_sub(1);
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if selected + 1 < total {
-                            selected += 1;
-                        }
-                    }
-                    KeyCode::Enter => {
-                        return Ok(ThemeMenuResult::Selected(selected));
-                    }
-                    KeyCode::Esc | KeyCode::Char('t') => {
-                        return Ok(ThemeMenuResult::Cancelled);
-                    }
-                    KeyCode::Char('q') => {
-                        return Ok(ThemeMenuResult::Quit);
-                    }
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        return Ok(ThemeMenuResult::Quit);
-                    }
-                    _ => {}
-                }
-            }
+    pub fn down(&mut self) {
+        if self.selected + 1 < self.total {
+            self.selected += 1;
         }
     }
+}
+
+/// Draw theme picker overlay on the right half of the screen.
+/// Call this after the main visualizer draw in the same frame.
+pub fn draw_theme_overlay(terminal: &mut Term, themes: &[Theme], picker: &ThemePicker) -> Result<()> {
+    terminal.draw(|frame| {
+        let area = frame.area();
+        // Right half of the screen
+        let overlay_width = area.width / 2;
+        let overlay = Rect::new(
+            area.width - overlay_width,
+            0,
+            overlay_width,
+            area.height,
+        );
+
+        // Clear the overlay area
+        frame.render_widget(ratatui::widgets::Clear, overlay);
+
+        let items: Vec<ListItem> = themes
+            .iter()
+            .enumerate()
+            .map(|(i, theme)| {
+                let mut spans: Vec<Span> = vec![Span::raw("  ")];
+                for &color in theme.gradient {
+                    spans.push(Span::styled("██", Style::default().fg(color)));
+                }
+                spans.push(Span::raw(format!("  {}", theme.name)));
+
+                let item = ListItem::new(Line::from(spans));
+                if i == picker.selected {
+                    item.style(
+                        Style::default()
+                            .bg(Color::Rgb(40, 40, 40))
+                            .add_modifier(Modifier::BOLD),
+                    )
+                } else {
+                    item
+                }
+            })
+            .collect();
+
+        let sel_theme = &themes[picker.selected];
+        let border_color = sel_theme.gradient[sel_theme.gradient.len() / 2];
+        let list = List::new(items).block(
+            Block::default()
+                .title(Span::styled(" select theme ", Style::default().fg(border_color)))
+                .title_bottom(Span::styled(
+                    " ↑/↓ navigate  Enter select  Esc back ",
+                    Style::default().fg(Color::DarkGray),
+                ))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color))
+                .padding(Padding::vertical(1)),
+        );
+
+        frame.render_widget(list, overlay);
+    })?;
+    Ok(())
 }
 
 /// Mutable settings that can be changed at runtime.
