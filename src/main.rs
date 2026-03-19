@@ -28,10 +28,6 @@ struct Cli {
     #[arg(long)]
     fps: Option<u64>,
 
-    /// Number of spectrum bars
-    #[arg(short, long)]
-    bars: Option<usize>,
-
     /// Low frequency cutoff in Hz
     #[arg(long)]
     low_freq: Option<f32>,
@@ -111,6 +107,7 @@ const MONSTERCAT_STRENGTH: f32 = 0.75;
 const MIN_BARS: usize = 8;
 const MAX_BARS: usize = 256;
 const BAR_STEP: usize = 8;
+const SENS_STEP: u32 = 10;
 /// Gravity acceleration in units/s². At 60fps (dt≈0.017s), a bar at height 1.0
 /// takes about 0.25s to fall — similar feel to the old per-frame 0.01 value.
 const GRAVITY_ACCEL: f32 = 5.0;
@@ -145,20 +142,19 @@ fn save_state(
     cfg: &mut config::Config,
     settings: &render::Settings,
     theme_name: &str,
-    num_bars: usize,
     mode: &Mode,
 ) {
     cfg.smoothing = settings.smoothing;
     cfg.monstercat = settings.monstercat;
     cfg.noise_floor = settings.noise_floor;
     cfg.theme = theme_name.to_string();
-    cfg.bars = num_bars;
+    cfg.bars = 0;
     cfg.mode = mode.as_str().to_string();
 
     cfg.gradient_by_position = settings.gradient_by_position;
-    cfg.bars = settings.bars;
     cfg.bar_width = settings.bar_width;
     cfg.bar_spacing = settings.bar_spacing;
+    cfg.sensitivity = settings.sensitivity;
 
     let _ = config::save(cfg);
 }
@@ -183,9 +179,6 @@ fn main() -> Result<()> {
     }
     if let Some(f) = cli.fps {
         cfg.fps = f;
-    }
-    if let Some(b) = cli.bars {
-        cfg.bars = b;
     }
     if let Some(f) = cli.low_freq {
         cfg.low_freq = f;
@@ -235,8 +228,8 @@ fn main() -> Result<()> {
     let mut terminal = render::init()?;
     let fps = cfg.fps.max(1);
     let frame_duration = Duration::from_millis(1000 / fps);
-    let mut desired_bars = if cfg.bars == 0 { MAX_BARS } else { cfg.bars.clamp(MIN_BARS, MAX_BARS) };
-    let mut num_bars = desired_bars;
+    let mut desired_bars = MAX_BARS;
+    let mut num_bars = MIN_BARS;
     let mut prev_bars: Vec<f32> = vec![0.0; num_bars];
     let mut prev_left: Vec<f32> = vec![0.0; num_bars];
     let mut prev_right: Vec<f32> = vec![0.0; num_bars];
@@ -254,9 +247,9 @@ fn main() -> Result<()> {
         noise_floor: cfg.noise_floor,
         theme_idx,
         gradient_by_position: cfg.gradient_by_position,
-        bars: cfg.bars,
         bar_width: cfg.bar_width.clamp(1, 8),
         bar_spacing: cfg.bar_spacing.clamp(0, 4),
+        sensitivity: cfg.sensitivity.clamp(10, 500),
     };
 
     let analyzer = analysis::SpectrumAnalyzer::new();
@@ -293,11 +286,11 @@ fn main() -> Result<()> {
             fps_timer = Instant::now();
         }
 
-        // Compute bar count: fill the terminal width based on bar_width + bar_spacing.
-        // desired_bars acts as an upper limit (user can reduce with Down/-).
+        // Compute max bars that fit the terminal width.
         let term_w = terminal.size()?.width.saturating_sub(2) as usize;
         let stride = settings.bar_width + settings.bar_spacing;
         let max_fit = if stride > 0 { (term_w + settings.bar_spacing) / stride } else { term_w };
+        // Auto-fill up to desired_bars (user can reduce with Left arrow).
         let effective_bars = desired_bars.min(max_fit).max(MIN_BARS);
         if effective_bars != num_bars {
             num_bars = effective_bars;
@@ -313,7 +306,7 @@ fn main() -> Result<()> {
                 prev_bars = vec![0.0; num_bars];
                 prev_left = vec![0.0; num_bars];
                 prev_right = vec![0.0; num_bars];
-                save_state(&mut cfg, &settings, current_theme.name, num_bars, &mode);
+                save_state(&mut cfg, &settings, current_theme.name, &mode);
                 continue;
             }
             render::Action::SelectDevice => {
@@ -345,7 +338,7 @@ fn main() -> Result<()> {
                         theme_idx = idx;
                         current_theme = &theme::THEMES[idx];
                         settings.theme_idx = idx;
-                        save_state(&mut cfg, &settings, current_theme.name, num_bars, &mode);
+                        save_state(&mut cfg, &settings, current_theme.name, &mode);
                     }
                     render::ThemeMenuResult::Quit => break,
                     render::ThemeMenuResult::Cancelled => {}
@@ -358,8 +351,7 @@ fn main() -> Result<()> {
                         settings = new_settings;
                         theme_idx = settings.theme_idx;
                         current_theme = &theme::THEMES[theme_idx];
-                        desired_bars = if settings.bars == 0 { MAX_BARS } else { settings.bars.clamp(MIN_BARS, MAX_BARS) };
-                        save_state(&mut cfg, &settings, current_theme.name, num_bars, &mode);
+                        save_state(&mut cfg, &settings, current_theme.name, &mode);
                     }
                     None => break,
                 }
@@ -369,24 +361,30 @@ fn main() -> Result<()> {
                 render::help(&mut terminal)?;
                 continue;
             }
+            render::Action::SensUp => {
+                settings.sensitivity = (settings.sensitivity + SENS_STEP).min(500);
+                save_state(&mut cfg, &settings, current_theme.name, &mode);
+                continue;
+            }
+            render::Action::SensDown => {
+                settings.sensitivity = settings.sensitivity.saturating_sub(SENS_STEP).max(10);
+                save_state(&mut cfg, &settings, current_theme.name, &mode);
+                continue;
+            }
             render::Action::MoreBars => {
-                desired_bars = (num_bars + BAR_STEP).min(MAX_BARS);
-                settings.bars = desired_bars;
+                desired_bars = (num_bars + BAR_STEP).min(max_fit).min(MAX_BARS);
                 num_bars = desired_bars;
                 prev_bars = vec![0.0; num_bars];
                 prev_left = vec![0.0; num_bars];
                 prev_right = vec![0.0; num_bars];
-                save_state(&mut cfg, &settings, current_theme.name, num_bars, &mode);
                 continue;
             }
             render::Action::FewerBars => {
-                desired_bars = (num_bars.saturating_sub(BAR_STEP)).max(MIN_BARS);
-                settings.bars = desired_bars;
+                desired_bars = num_bars.saturating_sub(BAR_STEP).max(MIN_BARS);
                 num_bars = desired_bars;
                 prev_bars = vec![0.0; num_bars];
                 prev_left = vec![0.0; num_bars];
                 prev_right = vec![0.0; num_bars];
-                save_state(&mut cfg, &settings, current_theme.name, num_bars, &mode);
                 continue;
             }
             render::Action::None => {}
@@ -474,6 +472,10 @@ fn main() -> Result<()> {
                     analysis::noise_gate(&mut smoothed, settings.noise_floor);
                 }
                 autosens.apply(&mut smoothed, dt);
+                let sens = settings.sensitivity as f32 / 100.0;
+                if sens != 1.0 {
+                    for v in smoothed.iter_mut() { *v *= sens; }
+                }
                 // Store prev_bars before gravity so gravity doesn't feed back into smoothing
                 prev_bars = smoothed.clone();
                 gravity.apply(&mut smoothed, dt);
@@ -517,6 +519,11 @@ fn main() -> Result<()> {
 
                 autosens_l.apply(&mut smooth_l, dt);
                 autosens_r.apply(&mut smooth_r, dt);
+                let sens = settings.sensitivity as f32 / 100.0;
+                if sens != 1.0 {
+                    for v in smooth_l.iter_mut() { *v *= sens; }
+                    for v in smooth_r.iter_mut() { *v *= sens; }
+                }
                 // Store before gravity so gravity doesn't feed back into smoothing
                 prev_left = smooth_l.clone();
                 prev_right = smooth_r.clone();

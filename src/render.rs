@@ -53,9 +53,11 @@ pub enum Action {
     SelectTheme,
     Settings,
     Help,
+    CycleMode,
+    SensUp,
+    SensDown,
     MoreBars,
     FewerBars,
-    CycleMode,
 }
 
 /// Poll for input events. Returns the action to take.
@@ -77,8 +79,10 @@ pub fn poll_input(timeout: Duration) -> Result<Action> {
                 KeyCode::Char('s') => return Ok(Action::Settings),
                 KeyCode::Char('m') => return Ok(Action::CycleMode),
                 KeyCode::Char('?') => return Ok(Action::Help),
-                KeyCode::Up | KeyCode::Char('+') => return Ok(Action::MoreBars),
-                KeyCode::Down | KeyCode::Char('-') => return Ok(Action::FewerBars),
+                KeyCode::Up => return Ok(Action::SensUp),
+                KeyCode::Down => return Ok(Action::SensDown),
+                KeyCode::Right => return Ok(Action::MoreBars),
+                KeyCode::Left => return Ok(Action::FewerBars),
                 _ => {}
             }
         }
@@ -269,12 +273,12 @@ pub struct Settings {
     pub theme_idx: usize,
     /// If true, color by bar position; if false, color by amplitude.
     pub gradient_by_position: bool,
-    /// Number of bars (0 = auto-fill terminal width).
-    pub bars: usize,
     /// Width of each bar in terminal columns (1–8).
     pub bar_width: usize,
     /// Spacing between bars in terminal columns (0–4).
     pub bar_spacing: usize,
+    /// Sensitivity in percent (100 = normal).
+    pub sensitivity: u32,
 }
 
 /// Show settings menu. Returns updated settings.
@@ -334,13 +338,6 @@ pub fn settings_menu(terminal: &mut Term, settings: &Settings, themes: &[Theme])
                 ])),
                 ListItem::new(Line::from(vec![
                     Span::styled(
-                        format!("  {:16}", "Bars"),
-                        Style::default().fg(Color::Cyan),
-                    ),
-                    Span::raw(if current.bars == 0 { "auto".to_string() } else { format!("{}", current.bars) }),
-                ])),
-                ListItem::new(Line::from(vec![
-                    Span::styled(
                         format!("  {:16}", "Bar width"),
                         Style::default().fg(Color::Cyan),
                     ),
@@ -352,6 +349,13 @@ pub fn settings_menu(terminal: &mut Term, settings: &Settings, themes: &[Theme])
                         Style::default().fg(Color::Cyan),
                     ),
                     Span::raw(format!("{}", current.bar_spacing)),
+                ])),
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("  {:16}", "Sensitivity"),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    Span::raw(format!("{}%", current.sensitivity)),
                 ])),
             ]
             .into_iter()
@@ -449,29 +453,19 @@ fn adjust_setting(settings: &mut Settings, idx: usize, direction: i32, num_theme
             settings.gradient_by_position = !settings.gradient_by_position;
         }
         5 => {
-            // Bars: 0 = auto, 8–256 in steps of 8
-            if settings.bars == 0 && direction > 0 {
-                // already at auto (max), no-op
-            } else if settings.bars == 0 && direction < 0 {
-                settings.bars = 256;
-            } else {
-                let new = settings.bars as i32 + direction * 8;
-                if new <= 0 {
-                    settings.bars = 0; // wrap to auto
-                } else {
-                    settings.bars = (new as usize).clamp(8, 256);
-                }
-            }
-        }
-        6 => {
             // Bar width: 1–8
             settings.bar_width =
                 (settings.bar_width as i32 + direction).clamp(1, 8) as usize;
         }
-        7 => {
+        6 => {
             // Bar spacing: 0–4
             settings.bar_spacing =
                 (settings.bar_spacing as i32 + direction).clamp(0, 4) as usize;
+        }
+        7 => {
+            // Sensitivity: 10–500 in steps of 10
+            settings.sensitivity =
+                (settings.sensitivity as i32 + direction * 10).clamp(10, 500) as u32;
         }
         _ => {}
     }
@@ -492,8 +486,8 @@ pub fn help(terminal: &mut Term) -> Result<()> {
         ("t", "Select color theme"),
         ("s", "Settings (smoothing, noise, bar width/spacing)"),
         ("m", "Cycle visualization mode"),
-        ("Up / +", "More bars"),
-        ("Down / -", "Fewer bars"),
+        ("Up / Down", "Increase / decrease sensitivity"),
+        ("Right / Left", "More / fewer bars"),
         ("q / Esc", "Quit"),
         ("Ctrl+C", "Quit"),
     ];

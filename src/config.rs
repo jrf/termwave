@@ -23,6 +23,8 @@ pub struct Config {
     pub bar_width: usize,
     /// Spacing between bars in terminal columns.
     pub bar_spacing: usize,
+    /// Sensitivity in percent (100 = normal).
+    pub sensitivity: u32,
 }
 
 impl Default for Config {
@@ -40,6 +42,7 @@ impl Default for Config {
             gradient_by_position: false,
             bar_width: 2,
             bar_spacing: 1,
+            sensitivity: 100,
         }
     }
 }
@@ -94,6 +97,7 @@ fn add_comments(toml: &str) -> String {
         ("gradient_by_position =", "# Color by position (true) or amplitude (false)"),
         ("bar_width =", "# Width of each bar in terminal columns (1-8)"),
         ("bar_spacing =", "# Gap between bars in terminal columns (0-4)"),
+        ("sensitivity =", "# Sensitivity in percent (100 = normal, higher = louder)"),
     ];
 
     let mut result = String::with_capacity(toml.len() * 2);
