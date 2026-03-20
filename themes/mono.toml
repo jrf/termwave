@@ -1,10 +1,14 @@
 [colors]
+near_black = "#222222"
 dark_gray  = "#444444"
+dim        = "#666666"
 gray       = "#888888"
+silver     = "#aaaaaa"
 light_gray = "#bbbbbb"
+off_white  = "#dddddd"
 white      = "#eeeeee"
 
 [visualizer]
-gradient    = ["dark_gray", "gray", "light_gray", "white"]
+gradient    = ["near_black", "dark_gray", "dim", "gray", "silver", "light_gray", "off_white", "white"]
 wave_color  = "light_gray"
 scope_color = "white"

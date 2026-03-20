@@ -119,9 +119,8 @@ pub fn device_menu(terminal: &mut Term, devices: &[String], theme: &Theme) -> Re
                 if i == selected {
                     item.style(
                         Style::default()
-                            .fg(Color::White)
-                            .bg(Color::Rgb(40, 40, 40))
-                            .add_modifier(Modifier::BOLD),
+                            .fg(accent)
+                            .add_modifier(Modifier::BOLD | Modifier::REVERSED),
                     )
                 } else {
                     item
@@ -273,83 +272,55 @@ pub fn render_settings(frame: &mut ratatui::Frame, settings: &Settings, themes: 
     let smoothing_bar = slider_bar(settings.smoothing, 0.0, 0.99, 20);
     let noise_bar = slider_bar(settings.noise_floor, 0.0, 0.05, 20);
 
+    // Helper: build a settings row with cursor indicator for selected item
+    let label = |name: &str, idx: usize| -> Span {
+        let cursor = if idx == state.selected { "▸ " } else { "  " };
+        let style = if idx == state.selected {
+            Style::default().fg(accent).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(accent)
+        };
+        Span::styled(format!("{}{:16}", cursor, name), style)
+    };
+
     // Theme swatch
-    let mut theme_spans: Vec<Span> = vec![Span::styled(
-        format!("  {:16}", "Theme"),
-        Style::default().fg(accent),
-    )];
+    let mut theme_spans: Vec<Span> = vec![label("Theme", 0)];
     for &color in &theme.gradient {
-        theme_spans.push(Span::styled("██", Style::default().fg(color)));
+        theme_spans.push(Span::styled("█", Style::default().fg(color)));
     }
-    theme_spans.push(Span::raw(format!("  {}", theme.name)));
+    theme_spans.push(Span::raw(format!(" {}", theme.name)));
 
     let items: Vec<ListItem> = vec![
         ListItem::new(Line::from(theme_spans)),
         ListItem::new(Line::from(vec![
-            Span::styled(
-                format!("  {:16}", "Smoothing"),
-                Style::default().fg(accent),
-            ),
+            label("Smoothing", 1),
             Span::raw(format!("{} {:.2}", smoothing_bar, settings.smoothing)),
         ])),
         ListItem::new(Line::from(vec![
-            Span::styled(
-                format!("  {:16}", "Monstercat"),
-                Style::default().fg(accent),
-            ),
+            label("Monstercat", 2),
             Span::raw(if settings.monstercat { "[ON]" } else { "[OFF]" }),
         ])),
         ListItem::new(Line::from(vec![
-            Span::styled(
-                format!("  {:16}", "Noise floor"),
-                Style::default().fg(accent),
-            ),
+            label("Noise floor", 3),
             Span::raw(format!("{} {:.4}", noise_bar, settings.noise_floor)),
         ])),
         ListItem::new(Line::from(vec![
-            Span::styled(
-                format!("  {:16}", "Gradient"),
-                Style::default().fg(accent),
-            ),
+            label("Gradient", 4),
             Span::raw(if settings.gradient_by_position { "[position]" } else { "[amplitude]" }),
         ])),
         ListItem::new(Line::from(vec![
-            Span::styled(
-                format!("  {:16}", "Bar width"),
-                Style::default().fg(accent),
-            ),
+            label("Bar width", 5),
             Span::raw(format!("{}", settings.bar_width)),
         ])),
         ListItem::new(Line::from(vec![
-            Span::styled(
-                format!("  {:16}", "Bar spacing"),
-                Style::default().fg(accent),
-            ),
+            label("Bar spacing", 6),
             Span::raw(format!("{}", settings.bar_spacing)),
         ])),
         ListItem::new(Line::from(vec![
-            Span::styled(
-                format!("  {:16}", "Sensitivity"),
-                Style::default().fg(accent),
-            ),
+            label("Sensitivity", 7),
             Span::raw(format!("{}%", settings.sensitivity)),
         ])),
-    ]
-    .into_iter()
-    .enumerate()
-    .map(|(i, item)| {
-        if i == state.selected {
-            item.style(
-                Style::default()
-                    .fg(Color::White)
-                    .bg(Color::Rgb(40, 40, 40))
-                    .add_modifier(Modifier::BOLD),
-            )
-        } else {
-            item
-        }
-    })
-    .collect();
+    ];
 
     let list = List::new(items).block(
         Block::default()

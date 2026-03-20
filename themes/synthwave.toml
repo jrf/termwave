@@ -1,11 +1,14 @@
 [colors]
-deep_purple = "#2b0057"
-hot_pink    = "#ff2975"
-neon_pink   = "#ff6ac1"
-cyan        = "#00e5ff"
-neon_blue   = "#79e8ff"
+deep_purple  = "#2b0057"
+dark_magenta = "#6b1d6e"
+hot_pink     = "#ff2975"
+neon_pink    = "#ff6ac1"
+lavender     = "#d9a0ff"
+cyan         = "#00e5ff"
+sky          = "#55eeff"
+neon_blue    = "#79e8ff"
 
 [visualizer]
-gradient    = ["deep_purple", "hot_pink", "neon_pink", "cyan", "neon_blue"]
+gradient    = ["deep_purple", "dark_magenta", "hot_pink", "neon_pink", "lavender", "cyan", "sky", "neon_blue"]
 wave_color  = "hot_pink"
 scope_color = "cyan"

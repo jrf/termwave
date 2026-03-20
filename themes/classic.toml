@@ -1,10 +1,14 @@
 [colors]
-green  = "#00ff00"
-yellow = "#ffff00"
-red    = "#ff0000"
-lime   = "#33ff33"
+dark_green  = "#006600"
+green       = "#00aa00"
+lime        = "#33ff33"
+chartreuse  = "#77ff00"
+yellow      = "#ffff00"
+gold        = "#ffcc00"
+orange      = "#ff6600"
+red         = "#ff0000"
 
 [visualizer]
-gradient    = ["green", "lime", "yellow", "red"]
+gradient    = ["dark_green", "green", "lime", "chartreuse", "yellow", "gold", "orange", "red"]
 wave_color  = "green"
 scope_color = "lime"

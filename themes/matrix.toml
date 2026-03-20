@@ -1,10 +1,14 @@
 [colors]
+void        = "#001a00"
 dark_green  = "#003300"
-green       = "#00cc00"
+forest      = "#006622"
+green       = "#00aa00"
 bright      = "#00ff41"
+lime        = "#33ff66"
 light_green = "#66ff99"
+pale_green  = "#aaffcc"
 
 [visualizer]
-gradient    = ["dark_green", "green", "bright", "light_green"]
+gradient    = ["void", "dark_green", "forest", "green", "bright", "lime", "light_green", "pale_green"]
 wave_color  = "bright"
 scope_color = "green"

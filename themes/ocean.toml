@@ -1,11 +1,14 @@
 [colors]
+abyss      = "#000033"
 deep_blue  = "#000066"
-blue       = "#0055ff"
+blue       = "#0044cc"
+royal      = "#0055ff"
 cyan       = "#00ccff"
+turquoise  = "#00eedd"
 aqua       = "#00ffcc"
 sea_green  = "#66ffaa"
 
 [visualizer]
-gradient    = ["deep_blue", "blue", "cyan", "aqua", "sea_green"]
+gradient    = ["abyss", "deep_blue", "blue", "royal", "cyan", "turquoise", "aqua", "sea_green"]
 wave_color  = "cyan"
 scope_color = "aqua"
