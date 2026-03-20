@@ -1,0 +1,10 @@
+[colors]
+dark_gray  = "#444444"
+gray       = "#888888"
+light_gray = "#bbbbbb"
+white      = "#eeeeee"
+
+[visualizer]
+gradient    = ["dark_gray", "gray", "light_gray", "white"]
+wave_color  = "light_gray"
+scope_color = "white"

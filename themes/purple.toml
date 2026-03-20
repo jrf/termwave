@@ -1,0 +1,11 @@
+[colors]
+dark_purple = "#330066"
+purple      = "#7722cc"
+magenta     = "#cc44ff"
+pink        = "#ff77ff"
+light_pink  = "#ffaaff"
+
+[visualizer]
+gradient    = ["dark_purple", "purple", "magenta", "pink", "light_pink"]
+wave_color  = "magenta"
+scope_color = "pink"

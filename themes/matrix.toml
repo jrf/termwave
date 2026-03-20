@@ -1,0 +1,10 @@
+[colors]
+dark_green  = "#003300"
+green       = "#00cc00"
+bright      = "#00ff41"
+light_green = "#66ff99"
+
+[visualizer]
+gradient    = ["dark_green", "green", "bright", "light_green"]
+wave_color  = "bright"
+scope_color = "green"

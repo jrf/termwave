@@ -1,0 +1,13 @@
+[colors]
+bg_dark    = "#1e2030"
+blue       = "#82aaff"
+cyan       = "#86e1fc"
+magenta    = "#c099ff"
+purple     = "#fca7ea"
+teal       = "#4fd6be"
+orange     = "#ff966c"
+
+[visualizer]
+gradient    = ["bg_dark", "blue", "cyan", "teal", "purple", "magenta"]
+wave_color  = "blue"
+scope_color = "cyan"

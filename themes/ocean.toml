@@ -1,0 +1,11 @@
+[colors]
+deep_blue  = "#000066"
+blue       = "#0055ff"
+cyan       = "#00ccff"
+aqua       = "#00ffcc"
+sea_green  = "#66ffaa"
+
+[visualizer]
+gradient    = ["deep_blue", "blue", "cyan", "aqua", "sea_green"]
+wave_color  = "cyan"
+scope_color = "aqua"

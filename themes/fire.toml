@@ -1,0 +1,11 @@
+[colors]
+dark_red = "#8b0000"
+red      = "#ff0000"
+orange   = "#ff6600"
+yellow   = "#ffcc00"
+white    = "#ffffcc"
+
+[visualizer]
+gradient    = ["dark_red", "red", "orange", "yellow", "white"]
+wave_color  = "orange"
+scope_color = "yellow"

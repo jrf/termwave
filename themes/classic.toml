@@ -1,0 +1,10 @@
+[colors]
+green  = "#00ff00"
+yellow = "#ffff00"
+red    = "#ff0000"
+lime   = "#33ff33"
+
+[visualizer]
+gradient    = ["green", "lime", "yellow", "red"]
+wave_color  = "green"
+scope_color = "lime"
