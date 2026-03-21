@@ -4,10 +4,25 @@ mod config;
 mod render;
 mod theme;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use clap::Parser;
+
+/// Global flag set by SIGINT/SIGTERM handlers to trigger clean shutdown.
+static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+const SIGINT: std::ffi::c_int = 2;
+const SIGTERM: std::ffi::c_int = 15;
+
+extern "C" {
+    fn signal(sig: std::ffi::c_int, handler: usize) -> usize;
+}
+
+extern "C" fn shutdown_handler(_sig: std::ffi::c_int) {
+    SHUTDOWN.store(true, Ordering::Relaxed);
+}
 
 #[derive(Parser)]
 #[command(name = "termwave", about = "Terminal audio visualizer")]
@@ -108,7 +123,7 @@ const MIN_BARS: usize = 4;
 const SENS_STEP: u32 = 10;
 /// Gravity acceleration in units/s². At 60fps (dt≈0.017s), a bar at height 1.0
 /// takes about 0.25s to fall — similar feel to the old per-frame 0.01 value.
-const GRAVITY_ACCEL: f32 = 5.0;
+const GRAVITY_ACCEL: f32 = 8.0;
 /// Cooldown between tap restart attempts.
 const RESTART_COOLDOWN: Duration = Duration::from_secs(2);
 /// Audio is considered stale after this long without new samples.
@@ -179,8 +194,12 @@ impl VisualizerState {
         }
     }
 
-    /// Run the shared DSP pipeline on a single channel: smooth → monstercat →
-    /// noise gate → auto-sensitivity → manual sensitivity → gravity.
+    /// Run the shared DSP pipeline on a single channel: monstercat → noise gate →
+    /// auto-sensitivity → manual sensitivity → smooth → gravity.
+    ///
+    /// Smoothing runs after normalization so that `prev` and `current` are both
+    /// in the same 0.0–1.0 scale, avoiding the scale mismatch that previously
+    /// caused sluggish transient response.
     fn process_channel(
         prev: &mut Vec<f32>,
         raw_bars: &[f32],
@@ -189,20 +208,22 @@ impl VisualizerState {
         autosens: &mut analysis::AutoSensitivity,
         gravity: &mut analysis::Gravity,
     ) -> Vec<f32> {
-        let mut smoothed = analysis::smooth(prev, raw_bars, settings.smoothing, dt);
+        let mut bars = raw_bars.to_vec();
         if settings.monstercat {
-            analysis::monstercat(&mut smoothed, MONSTERCAT_STRENGTH);
+            analysis::monstercat(&mut bars, MONSTERCAT_STRENGTH);
         }
         if settings.noise_floor > 0.0 {
-            analysis::noise_gate(&mut smoothed, settings.noise_floor);
+            analysis::noise_gate(&mut bars, settings.noise_floor);
         }
-        autosens.apply(&mut smoothed, dt);
+        autosens.apply(&mut bars, dt);
         let sens = settings.sensitivity as f32 / 100.0;
         if sens != 1.0 {
-            for v in smoothed.iter_mut() {
+            for v in bars.iter_mut() {
                 *v *= sens;
             }
         }
+        // Smooth after normalization so both prev and bars are in 0.0–1.0 scale
+        let mut smoothed = analysis::smooth(prev, &bars, settings.smoothing, dt);
         *prev = smoothed.clone();
         gravity.apply(&mut smoothed, dt);
         smoothed
@@ -218,9 +239,15 @@ impl VisualizerState {
         settings: &render::Settings,
         dt: f32,
     ) -> Vec<f32> {
-        let magnitudes = self.analyzer.spectrum(samples);
-        let bars =
-            analysis::bin_spectrum(&magnitudes, self.num_bars, sample_rate, low_freq, high_freq);
+        let (bass_mag, main_mag) = self.analyzer.spectrum_dual(samples);
+        let bars = analysis::bin_spectrum(
+            &bass_mag,
+            &main_mag,
+            self.num_bars,
+            sample_rate,
+            low_freq,
+            high_freq,
+        );
         Self::process_channel(
             &mut self.prev_bars,
             &bars,
@@ -243,12 +270,24 @@ impl VisualizerState {
         settings: &render::Settings,
         dt: f32,
     ) -> (Vec<f32>, Vec<f32>) {
-        let left_mag = self.analyzer.spectrum(left_samples);
-        let right_mag = self.analyzer.spectrum(right_samples);
-        let left_bars =
-            analysis::bin_spectrum(&left_mag, self.num_bars, sample_rate, low_freq, high_freq);
-        let right_bars =
-            analysis::bin_spectrum(&right_mag, self.num_bars, sample_rate, low_freq, high_freq);
+        let (left_bass, left_main) = self.analyzer.spectrum_dual(left_samples);
+        let (right_bass, right_main) = self.analyzer.spectrum_dual(right_samples);
+        let left_bars = analysis::bin_spectrum(
+            &left_bass,
+            &left_main,
+            self.num_bars,
+            sample_rate,
+            low_freq,
+            high_freq,
+        );
+        let right_bars = analysis::bin_spectrum(
+            &right_bass,
+            &right_main,
+            self.num_bars,
+            sample_rate,
+            low_freq,
+            high_freq,
+        );
 
         let smooth_l = Self::process_channel(
             &mut self.prev_left,
@@ -490,6 +529,13 @@ fn check_audio_health(vis: &mut VisualizerState, audio: &mut AudioState) {
 }
 
 fn main() -> Result<()> {
+    // Install signal handlers so the tap subprocess gets cleaned up on SIGINT/SIGTERM.
+    // Without this, sleeping/waking or killing termwave leaves termwave-tap orphaned.
+    unsafe {
+        signal(SIGINT, shutdown_handler as usize);
+        signal(SIGTERM, shutdown_handler as usize);
+    }
+
     let cli = Cli::parse();
 
     if cli.list_devices {
@@ -603,6 +649,10 @@ fn main() -> Result<()> {
     let mut settings_state: Option<render::SettingsState> = None;
 
     loop {
+        if SHUTDOWN.load(Ordering::Relaxed) {
+            break;
+        }
+
         let frame_start = Instant::now();
 
         // FPS counter: update once per second

@@ -256,11 +256,14 @@ impl SettingsState {
 /// Render settings overlay (centered, 50% of terminal) on top of the current frame.
 pub fn render_settings(frame: &mut ratatui::Frame, settings: &Settings, themes: &[Theme], state: &SettingsState) {
     let full = frame.area();
+    // Use 80% of terminal width (min 40 cols) so the overlay fits in narrow terminals
+    let w = (full.width * 4 / 5).max(40).min(full.width);
+    let h = full.height / 2;
     let area = Rect::new(
-        full.width / 4,
+        full.width.saturating_sub(w) / 2,
         full.height / 4,
-        full.width / 2,
-        full.height / 2,
+        w,
+        h,
     );
 
     frame.render_widget(ratatui::widgets::Clear, area);
@@ -367,6 +370,10 @@ fn adjust_setting(settings: &mut Settings, idx: usize, direction: i32, num_theme
         1 => {
             // Smoothing: step by 0.05
             settings.smoothing = (settings.smoothing + direction as f32 * 0.05).clamp(0.0, 0.99);
+        }
+        2 => {
+            // Monstercat: toggle
+            settings.monstercat = !settings.monstercat;
         }
         3 => {
             // Noise floor: step by 0.001

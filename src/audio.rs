@@ -73,9 +73,16 @@ impl CaptureHandle {
 
 impl Drop for CaptureHandle {
     fn drop(&mut self) {
-        if let CaptureHandle::Tap(ref mut child) = self {
-            let _ = child.kill();
-            let _ = child.wait();
+        match self {
+            CaptureHandle::Device(ref stream) => {
+                // Explicitly pause the cpal stream before dropping to ensure
+                // CoreAudio fully releases the device.
+                let _ = stream.pause();
+            }
+            CaptureHandle::Tap(ref mut child) => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
         }
     }
 }

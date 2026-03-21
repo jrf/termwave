@@ -16,6 +16,7 @@ var globalStream: SCStream?
 var globalTap: AudioTap?
 var globalSigSrc: DispatchSourceSignal?
 var globalTermSrc: DispatchSourceSignal?
+var globalWatchdog: DispatchSourceTimer?
 
 @available(macOS 13.0, *)
 class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
@@ -191,6 +192,23 @@ func setup() async throws {
     }
     termSrc.resume()
     globalTermSrc = termSrc
+
+    // Watchdog: exit if parent process dies (reparented to launchd, ppid == 1).
+    // This prevents orphaned tap processes after sleep/wake or unclean shutdown.
+    let parentPid = getppid()
+    let watchdog = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+    watchdog.schedule(deadline: .now() + 2, repeating: 2.0)
+    watchdog.setEventHandler {
+        if getppid() != parentPid {
+            log("parent process died, stopping...")
+            Task {
+                try? await globalStream?.stopCapture()
+                exit(0)
+            }
+        }
+    }
+    watchdog.resume()
+    globalWatchdog = watchdog
 
     // setup() returns — dispatchMain() in the entry point keeps the process alive
 }

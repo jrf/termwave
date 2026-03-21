@@ -35,11 +35,11 @@ Two-process design: the Rust binary handles all visualization, the Swift binary 
 
 **Key modules**:
 - `audio.rs` — Two capture paths: `start_capture` (cpal device input) and `start_tap` (spawns `termwave-tap` subprocess, reads raw f32 from its stdout). `CaptureHandle` enum keeps the stream/child alive via RAII.
-- `analysis.rs` — Hann-windowed FFT (`FFT_SIZE = 8192`), logarithmic frequency binning, exponential frame smoothing, monstercat envelope smoothing, noise gate, `Gravity` (frame-rate independent bar fall-off), and `AutoSensitivity` (auto-gain normalization).
+- `analysis.rs` — Dual-resolution FFT (4096 for bass <200Hz, 2048 zero-padded to 4096 for mids/highs), logarithmic frequency binning with equalizer curve, frame smoothing, monstercat envelope smoothing, noise gate, `Gravity` (frame-rate independent bar fall-off), and `AutoSensitivity` (asymmetric gain: fast attack, slow multiplicative recovery).
 - `render.rs` — All ratatui terminal UI. Visualizer functions (`render_spectrum`, `render_wave`, `render_scope`, `render_stereo`) take a `&mut Frame` so they can be composed in a single `terminal.draw` call. Settings is a non-blocking overlay (`SettingsState` + `render_settings`) rendered on top of the visualizer. Device menu and help screen are still blocking. All UI chrome (borders, titles, labels) uses theme colors.
 - `theme.rs` — Loads theme definitions from TOML files in `~/.config/termwave/themes/`. Each theme file has a `[colors]` table of named hex colors and a `[visualizer]` table that references those names for gradient stops, wave_color, and scope_color. No theme data is hardcoded in Rust.
 - `config.rs` — Persists settings to `~/.config/termwave/config.toml` via serde/toml. Settings changed at runtime (theme, smoothing, etc.) are saved automatically.
 
 **System audio** (`tap/Sources/main.swift`): Uses ScreenCaptureKit to capture system audio output, mixes to mono f32, writes raw bytes to stdout. Requires macOS 13+ and Screen Recording permission.
 
-**Config persistence**: Runtime settings auto-save to `~/.config/termwave/config.toml`. CLI args override saved config. Defaults: 60fps, 64 bars, 20–20000Hz range, 0.5 smoothing.
+**Config persistence**: Runtime settings auto-save to `~/.config/termwave/config.toml`. CLI args override saved config. Defaults: 60fps, 50–10000Hz range, 0.3 smoothing, monstercat on.
