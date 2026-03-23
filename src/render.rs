@@ -234,6 +234,12 @@ impl SettingsState {
                     self.selected += 1;
                 }
             }
+            KeyCode::Home => {
+                self.selected = 0;
+            }
+            KeyCode::End => {
+                self.selected = self.num_items.saturating_sub(1);
+            }
             KeyCode::Left | KeyCode::Char('h') => {
                 adjust_setting(settings, self.selected, -1, num_themes);
             }
@@ -415,7 +421,9 @@ fn adjust_setting(settings: &mut Settings, idx: usize, direction: i32, num_theme
         i if i >= 8 && i - 8 < settings.eq.len() => {
             // EQ band: step by 0.1, range 0.0–3.0
             let band = i - 8;
-            settings.eq[band] = (settings.eq[band] + direction as f32 * 0.1).clamp(0.0, 3.0);
+            let raw = settings.eq[band] + direction as f32 * 0.1;
+            settings.eq[band] = (raw * 10.0).round() / 10.0;
+            settings.eq[band] = settings.eq[band].clamp(0.0, 3.0);
         }
         _ => {}
     }
