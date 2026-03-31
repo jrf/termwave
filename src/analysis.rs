@@ -330,22 +330,36 @@ impl AutoSensitivity {
     pub fn adjust(&mut self, bars: &mut [f32], framerate: f32, silence: bool) {
         let time_scale = 60.0 / framerate;
 
-        let mut overshoot = false;
-        for bar in bars.iter_mut() {
-            if *bar > 1.0 {
-                overshoot = true;
-                *bar = 1.0;
+        let mut max_bar: f32 = 0.0;
+        for bar in bars.iter() {
+            if *bar > max_bar {
+                max_bar = *bar;
             }
         }
 
-        if overshoot {
-            self.sens *= 0.98_f32.powf(time_scale);
+        if max_bar > 1.0 {
+            // Proportional attack: if bars overshoot by 5×, cut sens by 5×.
+            // Blend with a minimum 2% cut so mild overshoots still converge.
+            let reduction = (1.0 / max_bar).max(0.98_f32.powf(time_scale));
+            self.sens *= reduction;
             self.sens_init = false;
+
+            for bar in bars.iter_mut() {
+                if *bar > 1.0 {
+                    *bar = 1.0;
+                }
+            }
         } else if !silence {
             self.sens *= 1.01_f32.powf(time_scale);
             if self.sens_init {
                 self.sens *= 1.1_f32.powf(time_scale);
             }
+        }
+
+        // Cap sensitivity to prevent runaway gain during long silences.
+        const MAX_SENS: f32 = 100.0;
+        if self.sens > MAX_SENS {
+            self.sens = MAX_SENS;
         }
     }
 }
