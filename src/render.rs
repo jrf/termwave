@@ -564,6 +564,8 @@ pub fn render_spectrum(
         let x_offset = inner.x + ((inner.width as usize).saturating_sub(total_w) / 2) as u16;
 
         let height = inner.height as f32;
+        // 2x sub-rows for smooth gradient via half-block technique
+        let total_sub = (inner.height as usize) * 2;
 
         for (i, &v) in bars.iter().enumerate() {
             let normalized = v.clamp(0.0, 1.0);
@@ -586,22 +588,37 @@ pub fn render_spectrum(
             // Draw from bottom up
             for row in 0..inner.height {
                 let y = inner.y + inner.height - 1 - row;
-                let ch = if (row as usize) < full_cells {
-                    BLOCK_CHARS[8] // full block
-                } else if (row as usize) == full_cells && remainder > 0 {
-                    BLOCK_CHARS[remainder]
-                } else {
-                    ' '
-                };
+                let row_idx = row as usize;
 
-                if ch != ' ' {
-                    // Color by vertical position (bottom=0, top=1) or horizontal position
+                if row_idx < full_cells {
+                    if let Some(color) = h_color {
+                        // Position mode: single color per bar
+                        for x in x_start..x_end {
+                            let cell = &mut buf[(x, y)];
+                            cell.set_char(BLOCK_CHARS[8]);
+                            cell.set_fg(color);
+                        }
+                    } else {
+                        // Amplitude mode: use ▀ for 2x color resolution
+                        // ▀ fills top half with fg, bottom half with bg
+                        let sub_bottom = row_idx * 2;
+                        let sub_top = sub_bottom + 1;
+                        let color_bottom = theme.bar_color(sub_bottom as f32 / (total_sub - 1).max(1) as f32);
+                        let color_top = theme.bar_color(sub_top as f32 / (total_sub - 1).max(1) as f32);
+                        for x in x_start..x_end {
+                            let cell = &mut buf[(x, y)];
+                            cell.set_char('▀');
+                            cell.set_fg(color_top);
+                            cell.set_bg(color_bottom);
+                        }
+                    }
+                } else if row_idx == full_cells && remainder > 0 {
                     let color = h_color.unwrap_or_else(|| {
                         theme.bar_color(row as f32 / (height - 1.0).max(1.0))
                     });
                     for x in x_start..x_end {
                         let cell = &mut buf[(x, y)];
-                        cell.set_char(ch);
+                        cell.set_char(BLOCK_CHARS[remainder]);
                         cell.set_fg(color);
                     }
                 }
@@ -716,6 +733,7 @@ pub fn render_stereo(
 
         // Left channel: bars grow upward from center using block elements
         let half_h_f = half_h as f32;
+        let left_total_sub = (half_h as usize) * 2;
         for (i, &v) in left_bars.iter().enumerate() {
             let normalized = v.clamp(0.0, 1.0);
 
@@ -735,21 +753,34 @@ pub fn render_stereo(
             // Draw from center upward
             for row in 0..half_h {
                 let y = center_y - 1 - row;
-                let ch = if (row as usize) < full_cells {
-                    BLOCK_CHARS[8]
-                } else if (row as usize) == full_cells && remainder > 0 {
-                    BLOCK_CHARS[remainder]
-                } else {
-                    ' '
-                };
+                let row_idx = row as usize;
 
-                if ch != ' ' {
+                if row_idx < full_cells {
+                    if let Some(color) = h_color {
+                        for x in x_start..x_end {
+                            let cell = &mut buf[(x, y)];
+                            cell.set_char(BLOCK_CHARS[8]);
+                            cell.set_fg(color);
+                        }
+                    } else {
+                        let sub_bottom = row_idx * 2;
+                        let sub_top = sub_bottom + 1;
+                        let color_bottom = theme.bar_color(sub_bottom as f32 / (left_total_sub - 1).max(1) as f32);
+                        let color_top = theme.bar_color(sub_top as f32 / (left_total_sub - 1).max(1) as f32);
+                        for x in x_start..x_end {
+                            let cell = &mut buf[(x, y)];
+                            cell.set_char('▀');
+                            cell.set_fg(color_top);
+                            cell.set_bg(color_bottom);
+                        }
+                    }
+                } else if row_idx == full_cells && remainder > 0 {
                     let color = h_color.unwrap_or_else(|| {
                         theme.bar_color(row as f32 / (half_h_f - 1.0).max(1.0))
                     });
                     for x in x_start..x_end {
                         let cell = &mut buf[(x, y)];
-                        cell.set_char(ch);
+                        cell.set_char(BLOCK_CHARS[remainder]);
                         cell.set_fg(color);
                     }
                 }
@@ -763,6 +794,7 @@ pub fn render_stereo(
         // color we can't invert them cleanly.
         let lower_h = inner.height - half_h - 1; // -1 for center line
         let lower_h_f = lower_h as f32;
+        let right_total_sub = (lower_h as usize) * 2;
         for (i, &v) in right_bars.iter().enumerate() {
             let normalized = v.clamp(0.0, 1.0);
 
@@ -782,17 +814,32 @@ pub fn render_stereo(
 
             for row in 0..lower_h {
                 let y = center_y + 1 + row;
-                let color = h_color.unwrap_or_else(|| {
-                    theme.bar_color(row as f32 / (lower_h_f - 1.0).max(1.0))
-                });
+                let row_idx = row as usize;
 
-                if (row as usize) < full_cells {
-                    for x in x_start..x_end {
-                        let cell = &mut buf[(x, y)];
-                        cell.set_char(BLOCK_CHARS[8]);
-                        cell.set_fg(color);
+                if row_idx < full_cells {
+                    if let Some(color) = h_color {
+                        for x in x_start..x_end {
+                            let cell = &mut buf[(x, y)];
+                            cell.set_char(BLOCK_CHARS[8]);
+                            cell.set_fg(color);
+                        }
+                    } else {
+                        // ▀ top half = closer to center, bottom half = farther
+                        let sub_top = row_idx * 2;
+                        let sub_bottom = sub_top + 1;
+                        let color_top = theme.bar_color(sub_top as f32 / (right_total_sub - 1).max(1) as f32);
+                        let color_bottom = theme.bar_color(sub_bottom as f32 / (right_total_sub - 1).max(1) as f32);
+                        for x in x_start..x_end {
+                            let cell = &mut buf[(x, y)];
+                            cell.set_char('▀');
+                            cell.set_fg(color_top);
+                            cell.set_bg(color_bottom);
+                        }
                     }
-                } else if (row as usize) == full_cells && has_half {
+                } else if row_idx == full_cells && has_half {
+                    let color = h_color.unwrap_or_else(|| {
+                        theme.bar_color(row as f32 / (lower_h_f - 1.0).max(1.0))
+                    });
                     for x in x_start..x_end {
                         let cell = &mut buf[(x, y)];
                         cell.set_char('▀');
