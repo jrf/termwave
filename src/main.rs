@@ -552,8 +552,8 @@ fn main() -> Result<()> {
     // Install signal handlers so the tap subprocess gets cleaned up on SIGINT/SIGTERM.
     // Without this, sleeping/waking or killing termwave leaves termwave-tap orphaned.
     unsafe {
-        signal(SIGINT, shutdown_handler as usize);
-        signal(SIGTERM, shutdown_handler as usize);
+        signal(SIGINT, shutdown_handler as *const () as usize);
+        signal(SIGTERM, shutdown_handler as *const () as usize);
     }
 
     let cli = Cli::parse();
