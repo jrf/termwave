@@ -80,11 +80,32 @@ impl Drop for CaptureHandle {
                 let _ = stream.pause();
             }
             CaptureHandle::Tap(ref mut child) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                shutdown_tap(child);
             }
         }
     }
+}
+
+/// Send SIGTERM to the tap and wait briefly for it to exit cleanly so
+/// ScreenCaptureKit can stop the stream (clears the macOS screen-recording
+/// indicator). Falls back to SIGKILL if it doesn't exit in time.
+fn shutdown_tap(child: &mut Child) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+    }
+
+    let deadline = Instant::now() + std::time::Duration::from_millis(500);
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => thread::sleep(std::time::Duration::from_millis(20)),
+            Err(_) => break,
+        }
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Start capturing audio into the shared buffers from a device.
